@@ -1,0 +1,27 @@
+# Git
+.env
+.env.production
+.env.local
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Vector store (regenerate locally)
+data/chroma_db/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Eval outputs
+eval_results/
+ragas_eval_results.json
+
+# Pytest cache
+.pytest_cache/
+.deepeval/

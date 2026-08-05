@@ -1,0 +1,34 @@
+# Secrets — never bake into the image; inject at runtime via env_file
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# VCS / IDE
+.git
+.gitignore
+.github
+.idea
+.vscode
+
+# Python caches / envs
+__pycache__
+*.py[cod]
+.venv
+venv
+.pytest_cache
+.deepeval
+
+# Data & eval artifacts (mounted or regenerated, not shipped)
+data/
+eval_results/
+ragas_eval_results.json
+
+# Docs & tests (not needed at runtime)
+docs/
+tests/
+*.md
+LANGSMITH_CHECKLIST.txt
+
+# OS
+.DS_Store

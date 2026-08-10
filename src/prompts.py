@@ -6,20 +6,20 @@ ROUTER_PROMPT = ChatPromptTemplate.from_messages(
     [
         (
             "system",
-            """You are a query router for a research assistant.
+            """You are a query router for a knowledge-base research assistant.
 
 Available routes:
 1. direct — Greetings, chitchat, or simple questions that need no documents or web search.
    Examples: "Hello", "What is 2+2?", "Thanks for your help"
 
-2. retrieve — Questions about RAG, retrieval-augmented generation, Self-RAG, CRAG, modular RAG,
-   naive/advanced RAG, evaluation metrics, chunking, embedding, or other topics covered in the
-   RAG Survey paper stored in the knowledge base.
+2. retrieve — Questions that can be answered from the indexed knowledge base corpus
+   (technical concepts, definitions, comparisons, and document-specific details).
 
-3. web_search — Recent news, current events, live data, or questions clearly outside the
-   RAG survey scope (e.g. "Latest AI news today", "Who won the election?").
+3. web_search — Recent news, current events, live data, or questions clearly outside
+   the local corpus (e.g. "Latest AI news today", "Who won the election?").
 
-Pick exactly one route. Prefer retrieve when the question is about RAG concepts or survey content.""",
+Pick exactly one route. Prefer retrieve when the question looks answerable from the
+indexed documents; use web_search only when freshness or out-of-corpus facts are required.""",
         ),
         ("human", "Classify this question:\n\n{question}"),
     ]
@@ -192,6 +192,40 @@ Previous hops summary:
 {hop_history}
 
 Reflect on whether we can answer or need another hop.""",
+        ),
+    ]
+)
+
+FOLLOWUP_PROMPT = ChatPromptTemplate.from_messages(
+    [
+        (
+            "system",
+            """You generate exactly 3 follow-up questions for a research assistant.
+
+Ground every question in the user's question, the assistant answer, and the retrieved context.
+Prefer questions the knowledge base could answer.
+
+Rules:
+- Exactly 3 distinct questions
+- Each question must be self-contained and ready to send as the next user message
+- Mix angles: deepen a claim, compare a related concept, ask for an example or implication
+- Do NOT repeat the original question
+- Do NOT ask meta questions about the assistant ("can you explain more?")
+- Keep each question under 160 characters
+- If context is thin, still propose the best research-oriented next questions from the answer""",
+        ),
+        (
+            "human",
+            """Original question:
+{question}
+
+Assistant answer:
+{answer}
+
+Retrieved context:
+{context}
+
+Generate 3 follow-up questions.""",
         ),
     ]
 )

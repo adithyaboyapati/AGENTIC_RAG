@@ -41,10 +41,16 @@ def evaluate_query(question: str, mode: str) -> ModeEvalResult | None:
         result = run_agent(question, mode)
         elapsed = (time.time() - start) * 1000
 
-        # Format context from sources
-        context = "\n---\n".join(result.sources) if result.sources else "(No retrieval)"
+        # Judge against retrieved chunk text (not source path labels)
+        if result.context_docs:
+            context = "\n---\n".join(result.context_docs)
+        elif result.citations:
+            context = "\n---\n".join(
+                c.snippet for c in result.citations if c.snippet
+            ) or "(No retrieval)"
+        else:
+            context = "(No retrieval)"
 
-        # Evaluate
         metrics = evaluate_metrics(question, result.answer, context)
 
         eval_result = ModeEvalResult(

@@ -4,7 +4,7 @@ Phase 2: LangGraph query router.
 Uses LangGraph for orchestration and LangChain inside each node:
   - router_chain     (classify)
   - direct_chain     (direct path)
-  - get_retriever()  (retrieve path)
+  - retrieve()       (retrieve path)
   - rag_chain        (generate path)
   - web_search tool  (web path)
 
@@ -22,8 +22,10 @@ from langgraph.graph import END, START, StateGraph
 
 from src.agents.router import RouteType, router_chain
 from src.chains.generation import direct_chain, rag_chain, web_search_chain
-from src.retrieval.retriever import format_docs, get_retriever
-from src.schemas import AgentResponse
+from src.retrieval.citations import build_response, docs_to_context, docs_to_sources
+from src.retrieval.retriever import format_docs, retrieve
+from src.schemas import AgentResponse, Citation
+from src.streaming import run_graph_streaming, stream_text
 from src.tools.web_search import web_search
 
 
@@ -50,22 +52,21 @@ def classify_node(state: RouterState) -> dict:
 
 def direct_answer_node(state: RouterState) -> dict:
     """Node: LangChain direct_chain answers without retrieval."""
-    answer = direct_chain.invoke({"question": state["question"]})
+    answer = stream_text(direct_chain, {"question": state["question"]})
     return {
         "answer": answer,
         "sources": [],
+        "documents": [],
         "steps": ["Direct answer (no retrieval)"],
     }
 
 
 def retrieve_node(state: RouterState) -> dict:
-    """Node: LangChain VectorStoreRetriever fetches documents."""
-    retriever = get_retriever()
-    docs = retriever.invoke(state["question"])
-    sources = list({doc.metadata.get("source", "unknown") for doc in docs})
+    """Node: hybrid/MMR/similarity retriever fetches documents."""
+    docs = retrieve(state["question"])
     return {
         "documents": docs,
-        "sources": sources,
+        "sources": docs_to_sources(docs),
         "steps": [f"Retrieved {len(docs)} chunks from knowledge base"],
     }
 
@@ -73,7 +74,9 @@ def retrieve_node(state: RouterState) -> dict:
 def generate_node(state: RouterState) -> dict:
     """Node: LangChain rag_chain generates from retrieved context."""
     context = format_docs(state["documents"])
-    answer = rag_chain.invoke({"context": context, "question": state["question"]})
+    answer = stream_text(
+        rag_chain, {"context": context, "question": state["question"]}
+    )
     return {
         "answer": answer,
         "steps": ["Generated answer from retrieved context"],
@@ -83,11 +86,14 @@ def generate_node(state: RouterState) -> dict:
 def web_search_node(state: RouterState) -> dict:
     """Node: LangChain web_search tool + web_search_chain."""
     context = web_search.invoke(state["question"])
-    answer = web_search_chain.invoke({"context": context, "question": state["question"]})
+    answer = stream_text(
+        web_search_chain, {"context": context, "question": state["question"]}
+    )
     return {
         "web_context": context,
         "answer": answer,
         "sources": ["web search"],
+        "documents": [],
         "steps": ["Web search + generated answer"],
     }
 
@@ -138,7 +144,8 @@ def get_router_graph():
 def ask_router(question: str) -> AgentResponse:
     """Run the Phase 2 LangGraph router agent."""
     graph = get_router_graph()
-    result = graph.invoke(
+    result = run_graph_streaming(
+        graph,
         {
             "question": question,
             "route": "",
@@ -148,12 +155,21 @@ def ask_router(question: str) -> AgentResponse:
             "answer": "",
             "sources": [],
             "steps": [],
-        }
+        },
     )
-    return AgentResponse(
+    docs = result.get("documents") or []
+    citations: list[Citation] = []
+    context_docs = docs_to_context(docs)
+    if result.get("route") == RouteType.WEB_SEARCH.value and result.get("web_context"):
+        context_docs = [result["web_context"]]
+
+    return build_response(
         answer=result["answer"],
         mode="router",
+        docs=docs,
         sources=result.get("sources", []),
+        context_docs=context_docs,
+        citations=citations if not docs else None,
         route=result.get("route"),
         route_reason=result.get("route_reason"),
         steps=result.get("steps", []),

@@ -1,23 +1,8 @@
-"""LangChain tools for agent use."""
+"""Backward-compatible web search tool export.
 
-from langchain_core.tools import tool
+Prefer importing from `src.tools.all_tools` in new code.
+"""
 
-_ddg_search = None
+from src.tools.all_tools import web_search
 
-
-def _get_ddg_search():
-    """Lazy-init LangChain DuckDuckGoSearchRun (only needed for web_search route)."""
-    global _ddg_search
-    if _ddg_search is None:
-        from langchain_community.tools import DuckDuckGoSearchRun
-
-        _ddg_search = DuckDuckGoSearchRun()
-    return _ddg_search
-
-
-# Deprecated: use src.tools.all_tools.web_search instead
-# This is kept for backward compatibility with router_graph.py imports
-@tool
-def web_search(query: str) -> str:
-    """Search the web for recent or external information not in the knowledge base."""
-    return _get_ddg_search().run(query)
+__all__ = ["web_search"]

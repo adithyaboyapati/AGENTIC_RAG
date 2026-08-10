@@ -1,4 +1,43 @@
+# Single-host production stack.
+#
+# Port policy: only the frontend (8080) and the API (8000) are published to the
+# host. Redis, Chroma, Prometheus, and Grafana are reachable only on the
+# internal compose network — publishing them exposes unauthenticated data
+# stores and dashboards to anything that can reach the host.
+# Override with docker-compose.override.yml locally if you need direct access.
+
 services:
+  redis:
+    image: redis:7-alpine
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      - --save
+      - "900"
+      - "1"
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
+  chroma:
+    image: chromadb/chroma:0.6.3
+    expose:
+      - "8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    restart: unless-stopped
+
   agentic-rag:
     build: .
     ports:
@@ -7,14 +46,95 @@ services:
       - .env.production
     environment:
       - ENVIRONMENT=production
-      - CHROMA_PERSIST_DIR=/data/chroma_db
+      - CHROMA_MODE=http
+      - CHROMA_HOST=chroma
+      - CHROMA_PORT=8000
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0
+      - CACHE_ENABLED=true
+      # Shared budgets across workers — required in production with API_WORKERS>1.
+      - RATE_LIMIT_BACKEND=redis
+      # Behind the frontend proxy, so honour the first X-Forwarded-For hop.
+      - TRUST_PROXY_HEADERS=true
+      # /metrics is reachable only on the internal compose network (no host
+      # port published), so network isolation is the control and Prometheus can
+      # scrape without a key. Running the API outside compose? Leave the
+      # default (true) and give your scraper an X-API-Key header.
+      - PROTECT_METRICS_ENDPOINT=false
+      # Readiness stays gated — it is richer than /metrics and nothing on the
+      # internal network needs it (health checks use /health).
+      - PROTECT_READINESS_ENDPOINT=true
+    depends_on:
+      redis:
+        condition: service_healthy
+      chroma:
+        condition: service_started
     volumes:
-      - ./data/chroma_db:/data/chroma_db
       - ./data/sample_docs:/app/data/sample_docs:ro
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/ready')"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status == 200 else 1)"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "8080:80"
+    environment:
+      - API_UPSTREAM=http://agentic-rag:8000
+      # Injected server-side so the key never reaches the browser. Sourced from
+      # the same file as the API so the two can never drift out of sync.
+      - API_KEY=${API_KEY:?API_KEY is required — must match the API}
+    depends_on:
+      agentic-rag:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  # --- Observability (optional: docker compose up prometheus grafana -d) ------
+  prometheus:
+    image: prom/prometheus:v3.2.1
+    expose:
+      - "9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.5.2
+    # Not published: reach it over the compose network or an SSH tunnel
+    # (ssh -L 3000:localhost:3000) rather than exposing a dashboard publicly.
+    expose:
+      - "3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:?GRAFANA_ADMIN_PASSWORD is required}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+      - GF_USERS_DEFAULT_THEME=dark
+      - GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH=/etc/grafana/dashboards/agentic-rag.json
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  chroma_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

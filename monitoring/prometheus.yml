@@ -1,0 +1,24 @@
+# Prometheus scrape config for Agentic RAG.
+#
+# The API's /metrics endpoint is auth-gated by default
+# (PROTECT_METRICS_ENDPOINT). In the compose stack it is turned off because no
+# host port is published and the scrape happens over the internal network.
+# To scrape an API that keeps the gate on, supply the key as a file:
+#
+#   http_headers:
+#     X-API-Key:
+#       files: [/etc/prometheus/api_key]
+#
+# Prometheus does not expand environment variables in this file, so the key has
+# to be mounted as a file rather than passed as an env var.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: agentic-rag
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["agentic-rag:8000"]
+        labels:
+          env: compose

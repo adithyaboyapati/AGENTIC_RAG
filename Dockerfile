@@ -1,30 +1,53 @@
-# Production Dockerfile for Agentic RAG
+# Production image for Agentic RAG.
+#
+# Multi-stage: wheels are compiled in the builder, so the compiler toolchain
+# never ships in the runtime image.
 
-FROM python:3.10-slim
+# --- Builder -----------------------------------------------------------------
+FROM python:3.10-slim AS builder
 
-WORKDIR /app
+ENV PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# System dependencies (gcc for native wheels that lack prebuilt binaries)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies first so code changes don't bust this layer
-COPY requirements.txt /app/requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt
+WORKDIR /build
+COPY requirements.txt .
+# Build every dependency to a wheel so the runtime stage installs without gcc.
+RUN pip wheel --wheel-dir /wheels -r requirements.txt
 
-# Copy application code (secrets/data excluded via .dockerignore)
-COPY . /app
+# --- Runtime -----------------------------------------------------------------
+FROM python:3.10-slim AS runtime
 
-# Run as non-root; /data holds the Chroma volume mount
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+COPY --from=builder /wheels /wheels
+COPY requirements.txt .
+RUN pip install --no-index --find-links=/wheels -r requirements.txt \
+    && rm -rf /wheels
+
+# Create the user before copying so application code is owned by root and is
+# not writable by the process that runs it.
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /data/chroma_db /app/data \
-    && chown -R appuser:appuser /app /data
+    && chown -R appuser:appuser /data /app/data
+
+# Application code (secrets/data excluded via .dockerignore)
+COPY --chown=root:root . /app
+
 USER appuser
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+# Liveness only — /health/ready is auth-gated and checks dependencies.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=15s --retries=3 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health', timeout=5).status == 200 else 1)"
 
 CMD ["uvicorn", "src.api.server:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -24,13 +24,18 @@ Privacy protection includes:
 
 | Type | Pattern | Example |
 |------|---------|---------|
-| **SSN** | XXX-XX-XXXX or XXXXXXXXX | 123-45-6789 |
+| **SSN** | XXX-XX-XXXX (dashes required) | 123-45-6789 |
 | **Credit Card** | 4 groups of 4 digits | 1234-5678-9012-3456 |
 | **Email** | user@domain.com | john@example.com |
 | **Phone** | (123) 456-7890 or similar | (555) 123-4567 |
 | **Address** | Street address with city/state | 123 Main St, Springfield |
 | **Passport** | 1-2 letters + 6-9 digits | AB123456 |
 | **Driver License** | 2 letters + 7-8 digits | CA1234567 |
+
+> **Note:** the SSN pattern deliberately requires dashes (`\d{3}-\d{2}-\d{4}`). An earlier
+> version also matched any bare 9-digit number, which false-positived on things like row
+> counts or IDs ("the dataset has 123456789 rows"). Bare digit strings are no longer
+> treated as SSNs.
 
 ### Detection Example
 
@@ -121,57 +126,137 @@ masked = DataRedactor.mask_value(ssn, reveal_chars=4)
 
 ### Default Policy
 
+`PrivacyPolicy` is a dataclass — construct it with the behaviour you want rather than
+mutating flags after the fact:
+
 ```python
-from src.privacy import PrivacyPolicy
+from src.privacy import PrivacyMode, PrivacyPolicy
 
-policy = PrivacyPolicy()
-
-# Detection settings
-policy.BLOCK_ON_PII = True         # Block queries with PII
-policy.BLOCK_ON_PHI = True         # Block queries with PHI
-
-# Processing settings
-policy.REDACT_PII = False          # Remove PII from output
-policy.REDACT_PHI = False          # Remove PHI from output
-
-# Logging settings
-policy.LOG_PII = True              # Log PII findings for audit
-policy.LOG_PHI = True              # Log PHI findings for audit
-
-# Data retention
-policy.DATA_RETENTION_DAYS = 30    # Keep data for 30 days
-
-# Compliance modes
-policy.COMPLIANCE_GDPR = False     # Enable GDPR mode
-policy.COMPLIANCE_HIPAA = False    # Enable HIPAA mode
-policy.COMPLIANCE_CCPA = False     # Enable CCPA mode
+policy = PrivacyPolicy(
+    input_mode=PrivacyMode.REDACT,   # off | redact | block  (default: redact)
+    output_mode=PrivacyMode.REDACT,  # off | redact | block  (default: redact)
+    detect_phi=False,                # PHI is opt-in (default: False)
+    log_findings=True,               # log detections for audit
+    data_retention_days=30,
+    compliance_gdpr=False,
+    compliance_hipaa=False,
+    compliance_ccpa=False,
+)
 ```
+
+The legacy uppercase names (`BLOCK_ON_PII`, `REDACT_PHI`, …) still resolve as read-only
+properties derived from the modes above, so older call sites keep working — but they
+cannot be assigned. Set the modes instead.
+
+### Why detection is context-aware
+
+A privacy filter that fires too often is not "safer" — it silently corrupts correct
+answers, which is a worse failure than missing a redaction on a corpus that contains no
+PII. Two rules keep the false-positive rate down:
+
+**Shape alone is not identity.** `AB12345678` is a chunk ID far more often than a
+driver's licence, so identifier patterns (passport, licence, insurance/member ID) only
+fire when introduced by a *label* — `Passport No: AB1234567`. Credit-card candidates
+must additionally pass a **Luhn checksum**, so order numbers and hashes are ignored.
+
+**A topic mention is not a disclosure.** `PHIDetector` requires clinical or possessive
+context within a short window (`patient`, `diagnosed with`, `prescribed`, `my`, …)
+before a medical term counts. So:
+
+| Text | PHI? |
+|---|---|
+| `You can bypass the cache by setting CACHE_ENABLED=false` | No |
+| `The COVID dataset is indexed in Chroma` | No |
+| `What treatments exist for diabetes?` | No — informational, the intended use case |
+| `Patient was diagnosed with diabetes and prescribed metformin` | Yes |
+
+Ordinary English words that double as procedures (`bypass`, `recovery`, `screening`) are
+excluded from the keyword list entirely.
+
+### Why PHI is opt-in
+
+PII and PHI are different risk classes and have separate switches. PHI detection is off
+by default (`PRIVACY_DETECT_PHI=false`) because for a general-purpose corpus it produces
+more noise than signal. Enable it for clinical deployments; combine with
+`PRIVACY_INPUT_MODE=block` if your intake flow must reject any PHI outright.
 
 ### Custom Policies
 
 ```python
-from src.privacy import PrivacyPolicy
+from src.privacy import PrivacyMode, PrivacyPolicy
 
-# Healthcare (HIPAA)
-healthcare_policy = PrivacyPolicy()
-healthcare_policy.BLOCK_ON_PHI = True
-healthcare_policy.LOG_PHI = True
-healthcare_policy.DATA_RETENTION_DAYS = 7  # Shorter retention
-healthcare_policy.COMPLIANCE_HIPAA = True
+# Healthcare (HIPAA) — detect PHI, reject it on the way in, short retention
+healthcare = PrivacyPolicy(
+    input_mode=PrivacyMode.BLOCK,
+    output_mode=PrivacyMode.REDACT,
+    detect_phi=True,
+    compliance_hipaa=True,
+    data_retention_days=7,
+)
 
-# European users (GDPR)
-gdpr_policy = PrivacyPolicy()
-gdpr_policy.BLOCK_ON_PII = True
-gdpr_policy.REDACT_PII = True
-gdpr_policy.DATA_RETENTION_DAYS = 30
-gdpr_policy.COMPLIANCE_GDPR = True
+# European users (GDPR) — mask rather than reject, so the assistant stays usable
+gdpr = PrivacyPolicy(
+    input_mode=PrivacyMode.REDACT,
+    output_mode=PrivacyMode.REDACT,
+    compliance_gdpr=True,
+    data_retention_days=30,
+)
 
-# California users (CCPA)
-ccpa_policy = PrivacyPolicy()
-ccpa_policy.BLOCK_ON_PII = True
-ccpa_policy.LOG_PII = True
-ccpa_policy.COMPLIANCE_CCPA = True
+# Internal corpus with no personal data at all — skip the work entirely
+internal = PrivacyPolicy(input_mode=PrivacyMode.OFF, output_mode=PrivacyMode.OFF)
 ```
+
+---
+
+## Runtime Configuration (Environment Variables)
+
+`src.privacy.get_privacy_policy()` builds the policy used by `src.runner.run_agent()`
+from `.env`. Behaviour is one explicit knob per direction:
+
+```bash
+# off | redact | block
+PRIVACY_INPUT_MODE=redact     # default
+PRIVACY_OUTPUT_MODE=redact    # default
+PRIVACY_DETECT_PHI=false      # PHI is opt-in
+PRIVACY_RETENTION_DAYS=30
+```
+
+| Mode | Input (`src.runner._prepare_agent_run`) | Output (`_apply_post_guardrails`) |
+|---|---|---|
+| `off` | Passed through untouched; nothing detected | Passed through untouched |
+| `redact` | Sensitive spans masked, request proceeds | Answer masked (`john@example.com` → `[EMAIL]`) and returned |
+| `block` | `ValueError` — the LLM never runs | `ValueError` — nothing is returned to the caller |
+
+`redact` is the default in both directions. Rejecting a whole question because it
+contains an email address is a poor experience for a document-QA product, and masking
+gives the same protection.
+
+Redaction happens **before** the cache key is computed, so the cache is keyed on the
+sanitized question and redaction never splits the cache.
+
+### Deprecated settings
+
+`REDACT_OUTPUT_PII` and `BLOCK_OUTPUT_PII` still work — they are mapped onto
+`PRIVACY_OUTPUT_MODE` at startup and logged as deprecation warnings. Note that the old
+`REDACT_OUTPUT_PII` drove PII *and* PHI together; PHI now requires
+`PRIVACY_DETECT_PHI=true`.
+
+| Old | New |
+|---|---|
+| `REDACT_OUTPUT_PII=true` | `PRIVACY_OUTPUT_MODE=redact` |
+| `REDACT_OUTPUT_PII=false` | `PRIVACY_OUTPUT_MODE=off` |
+| `BLOCK_OUTPUT_PII=true` | `PRIVACY_OUTPUT_MODE=block` |
+| `policy.BLOCK_ON_PII = True` | `PRIVACY_INPUT_MODE=block` |
+
+---
+
+## Data Retention
+
+`PRIVACY_RETENTION_DAYS` documents intent; [`docs/supabase_schema.sql`](supabase_schema.sql)
+enforces it. Applying that schema enables Row Level Security on `chat_messages` (deny by
+default — only the service role the API uses can read it) and installs
+`purge_expired_chat_messages(retention_days)` plus `delete_chat_session(session_id)` for
+GDPR/CCPA erasure requests. Schedule the purge with `pg_cron` or your own scheduler.
 
 ---
 
@@ -184,15 +269,22 @@ from src.privacy import PrivacyGuard, DEFAULT_PRIVACY_POLICY
 
 question = "My SSN is 123-45-6789"
 
-# Check according to policy
+# Check according to policy — ok=False only when a BLOCK_ON_* policy actually triggers.
+# `findings` is always populated with anything detected, even when ok=True, so you can
+# still log/redact non-blocking findings (e.g. PHI) downstream.
 ok, findings = PrivacyGuard.check_input(question, DEFAULT_PRIVACY_POLICY)
 
 if not ok:
-    print("❌ Input contains sensitive data:")
+    print("❌ Input blocked — contains sensitive data:")
     for f in findings:
         print(f"  - {f.data_type}: {f.value}")
 else:
-    print("✅ Input is safe")
+    print("✅ Input allowed")
+
+# PHI mentions don't block by default — this passes even though "diabetes" is detected:
+ok, findings = PrivacyGuard.check_input("What treatments exist for diabetes?", DEFAULT_PRIVACY_POLICY)
+assert ok is True
+assert len(findings) == 1  # still detected, just not blocking
 ```
 
 ### Check Output for Sensitive Data
@@ -240,7 +332,10 @@ clean_output = PrivacyGuard.process_output(text, policy)
 ```bash
 python -m src.cli ask "What is my SSN 123-45-6789?" --mode crag
 # ❌ ERROR: Input contains sensitive data: ssn
-# Query is blocked
+# Query is blocked (PII blocks by default)
+
+python -m src.cli ask "What treatments exist for diabetes?" --mode crag
+# ✅ Answered normally — PHI mentions don't block by default (see above)
 ```
 
 ### In API
@@ -279,12 +374,18 @@ except ValueError as e:
 
 **Implementation**:
 ```python
-policy = PrivacyPolicy()
-policy.COMPLIANCE_GDPR = True
-policy.BLOCK_ON_PII = True
-policy.LOG_PII = True
-policy.DATA_RETENTION_DAYS = 30
+policy = PrivacyPolicy(
+    compliance_gdpr=True,
+    input_mode=PrivacyMode.REDACT,   # or BLOCK if you must reject rather than mask
+    output_mode=PrivacyMode.REDACT,
+    log_findings=True,
+    data_retention_days=30,
+)
 ```
+
+Erasure and retention are enforced in the database, not just configured here — apply
+[`docs/supabase_schema.sql`](supabase_schema.sql) for `purge_expired_chat_messages()`
+and `delete_chat_session()`.
 
 ### HIPAA (Health Insurance Portability and Accountability Act)
 
@@ -313,10 +414,12 @@ policy.DATA_RETENTION_DAYS = 7
 
 **Implementation**:
 ```python
-policy = PrivacyPolicy()
-policy.COMPLIANCE_CCPA = True
-policy.BLOCK_ON_PII = True
-policy.LOG_PII = True
+policy = PrivacyPolicy(
+    compliance_ccpa=True,
+    input_mode=PrivacyMode.REDACT,
+    output_mode=PrivacyMode.REDACT,
+    log_findings=True,
+)
 ```
 
 ---
@@ -353,16 +456,15 @@ policy = DEFAULT_PRIVACY_POLICY
 
 report = {
     "policy": "default",
-    "block_pii": policy.BLOCK_ON_PII,
-    "block_phi": policy.BLOCK_ON_PHI,
-    "redact_pii": policy.REDACT_PII,
-    "redact_phi": policy.REDACT_PHI,
-    "log_sensitive_data": policy.LOG_PII or policy.LOG_PHI,
-    "data_retention_days": policy.DATA_RETENTION_DAYS,
+    "input_mode": policy.input_mode.value,
+    "output_mode": policy.output_mode.value,
+    "detect_phi": policy.detect_phi,
+    "log_findings": policy.log_findings,
+    "data_retention_days": policy.data_retention_days,
     "compliance_modes": [
-        ("GDPR", policy.COMPLIANCE_GDPR),
-        ("HIPAA", policy.COMPLIANCE_HIPAA),
-        ("CCPA", policy.COMPLIANCE_CCPA),
+        ("GDPR", policy.compliance_gdpr),
+        ("HIPAA", policy.compliance_hipaa),
+        ("CCPA", policy.compliance_ccpa),
     ]
 }
 
@@ -428,13 +530,18 @@ print("✅ Redaction works correctly")
 
 ## Best Practices
 
-### 1. **Block by Default**
+### 1. **Block Unambiguous PII by Default**
 ```python
-# ✅ Good: Block sensitive data unless explicitly allowed
+# ✅ Good: PII (SSN, credit card, email) has no legitimate reason to be
+# submitted to a chatbot — block it.
 policy.BLOCK_ON_PII = True
-policy.BLOCK_ON_PHI = True
 
-# ❌ Bad: Allow sensitive data
+# PHI is intentionally NOT blocked by default — informational questions about
+# medical topics are the expected use case, not a violation. Only enable this
+# for deployments that genuinely must reject any medical mention outright.
+policy.BLOCK_ON_PHI = False  # set True only if your use case requires it
+
+# ❌ Bad: Allow PII through unchecked
 policy.BLOCK_ON_PII = False
 ```
 
@@ -509,7 +616,7 @@ Always consider manual review for:
 
 ### Checklist
 
-- [ ] Enable privacy checks in all interfaces (CLI, API, Streamlit)
+- [ ] Enable privacy checks in all interfaces (CLI, API, React UI, Streamlit)
 - [ ] Set appropriate privacy policy for your use case
 - [ ] Configure compliance mode (GDPR/HIPAA/CCPA)
 - [ ] Set up audit logging
@@ -530,7 +637,7 @@ PRIVACY_POLICY = PrivacyPolicy()
 
 # Detection
 PRIVACY_POLICY.BLOCK_ON_PII = True
-PRIVACY_POLICY.BLOCK_ON_PHI = True
+PRIVACY_POLICY.BLOCK_ON_PHI = False  # True only for deployments that must reject any medical mention
 
 # Processing
 PRIVACY_POLICY.REDACT_PII = False

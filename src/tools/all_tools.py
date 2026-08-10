@@ -2,6 +2,12 @@
 LangChain tools for the Phase 6 tool-augmented agent.
 
 Each tool is a @tool — the LLM calls them by name with parameters.
+
+Failure / empty results use machine-readable prefixes so node gates can
+quarantine them before they contaminate graph state:
+  [TOOL_ERROR] …   — execution failed
+  [TOOL_EMPTY] …   — succeeded but no content
+  [CIRCUIT_OPEN] … — upstream circuit breaker open
 """
 
 from __future__ import annotations
@@ -11,7 +17,11 @@ import operator as op
 
 from langchain_core.tools import tool
 
-from src.retrieval.retriever import format_docs, retrieve
+from src.resilience.node_gate import (
+    PREFIX_CIRCUIT_OPEN,
+    PREFIX_TOOL_EMPTY,
+    PREFIX_TOOL_ERROR,
+)
 
 # Arithmetic-only expression evaluator. Never use eval() here: the expression
 # comes from the LLM, which is steerable by user input (prompt injection → RCE).
@@ -67,14 +77,15 @@ def _get_ddg_search():
 @tool
 def retrieve_docs(query: str) -> str:
     """
-    Search the RAG knowledge base for documents about a topic.
-    
-    Use this to find information about RAG concepts, techniques, or papers
-    from the indexed survey document.
+    Search the knowledge base for documents about a topic.
+
+    Use this to find information from indexed corpus documents.
     """
+    from src.retrieval.retriever import format_docs, retrieve
+
     docs = retrieve(query)
     if not docs:
-        return "No documents found."
+        return f"{PREFIX_TOOL_EMPTY} No documents found."
     return format_docs(docs)
 
 
@@ -82,17 +93,30 @@ def retrieve_docs(query: str) -> str:
 def web_search(query: str) -> str:
     """
     Search the internet for recent or external information.
-    
+
     Use this for current events, recent news, or information not in your knowledge base.
     """
-    return _get_ddg_search().run(query)
+    from src.resilience.circuit_breaker import CircuitOpenError, get_breaker
+
+    breaker = get_breaker("web_search")
+    try:
+        result = breaker.call(_get_ddg_search().run, query)
+    except CircuitOpenError:
+        return f"{PREFIX_CIRCUIT_OPEN} Web search temporarily unavailable."
+    except Exception as exc:
+        return f"{PREFIX_TOOL_ERROR} Web search failed: {type(exc).__name__}"
+
+    text = (result or "").strip()
+    if not text:
+        return f"{PREFIX_TOOL_EMPTY} Web search returned no results."
+    return text
 
 
 @tool
 def calculator(expression: str) -> str:
     """
     Evaluate a mathematical expression.
-    
+
     Examples:
     - "847 * 293" → computes multiplication
     - "2 ** 10" → computes powers
@@ -102,7 +126,7 @@ def calculator(expression: str) -> str:
         result = safe_calculate(expression)
         return str(result)
     except (ValueError, SyntaxError, ZeroDivisionError, OverflowError) as e:
-        return f"Error evaluating '{expression}': {e}"
+        return f"{PREFIX_TOOL_ERROR} Error evaluating '{expression}': {e}"
 
 
 # Tool registry for LangGraph

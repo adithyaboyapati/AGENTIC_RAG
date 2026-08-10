@@ -85,10 +85,28 @@ def render_trace(result) -> None:
             for step in result.steps:
                 st.markdown(f"- {step}")
 
-    if result.sources:
+    if result.citations:
+        with st.expander("Citations", expanded=False):
+            for c in result.citations:
+                page = f", p{c.page}" if c.page is not None else ""
+                st.markdown(f"**[{c.index}]** `{c.source}{page}`")
+                if c.snippet:
+                    st.caption(c.snippet)
+    elif result.sources:
         with st.expander("Sources", expanded=False):
             for src in result.sources:
                 st.markdown(f"- `{src}`")
+
+
+def render_follow_ups(follow_ups: list[str], key_prefix: str) -> None:
+    """Clickable follow-up suggestions that queue the next question."""
+    if not follow_ups:
+        return
+    st.markdown("**Suggested follow-ups**")
+    for i, q in enumerate(follow_ups):
+        if st.button(q, key=f"{key_prefix}-fu-{i}", use_container_width=True):
+            st.session_state.pending_question = q
+            st.rerun()
 
 
 def persist_exchange(session_id: str, question: str, answer: str, mode: str) -> None:
@@ -182,11 +200,13 @@ def main() -> None:
         caption += f" | Memory: **ON** ({len(st.session_state.messages)} messages)"
     st.caption(caption)
 
-    for msg in st.session_state.messages:
+    for idx, msg in enumerate(st.session_state.messages):
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant" and msg.get("trace") and show_trace:
                 render_trace(msg["trace"])
+            if msg["role"] == "assistant" and msg.get("follow_ups"):
+                render_follow_ups(msg["follow_ups"], key_prefix=f"hist-{idx}")
 
     question = st.chat_input("Ask a question about RAG…")
 
@@ -212,11 +232,13 @@ def main() -> None:
                     st.markdown(result.answer)
                     if show_trace:
                         render_trace(result)
+                    render_follow_ups(result.follow_ups, key_prefix="live")
                     st.session_state.messages.append(
                         {
                             "role": "assistant",
                             "content": result.answer,
                             "trace": result,
+                            "follow_ups": result.follow_ups,
                         }
                     )
                     persist_exchange(

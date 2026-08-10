@@ -274,6 +274,79 @@ graph:
 
 
 
+## Modern Production Additions
+
+### Hybrid Retrieval + Cross-Encoder Reranking
+
+First-stage search is cheap but noisy. Production pipelines usually:
+
+```
+Over-fetch candidates (dense + BM25 / RRF)
+  → Cross-encoder rerank (query + passage scored together)
+  → Keep top_k for the LLM
+```
+
+This project does exactly that in `src/retrieval/`:
+
+- **Hybrid retrieve** — dense embeddings + BM25 fused with Reciprocal Rank Fusion
+- **Rerank** — NVIDIA `llama-nemotron-rerank-vl-1b-v2` (API) or local FlashRank
+- **CRAG grading** (later) — LLM relevance filter that can rewrite / web-fallback
+
+Rerank improves *ordering* of what enters the context window; CRAG decides whether that
+context is *good enough*. They complement each other.
+
+### Citation & Grounding
+
+Once you have answers, you need to know **which chunks they came from**. The system now
+tracks citations:
+
+```
+Citation = {
+  index: 1,
+  chunk_id: "sha256-...",
+  source: "rag.pdf",
+  page: 5,
+  section: "3.2 Grading",
+  snippet: "The grader assigns each chunk a relevance score...",
+  score: 0.92  # usually the rerank score when reranking is enabled
+}
+```
+
+Every answer includes a list of `Citation` objects. The frontend renders them as
+clickable source links. Evaluation pipelines use them to measure **answer grounding** —
+does each claim in the answer have a source to back it up?
+
+### Follow-Up Questions
+
+After answering, the system can generate 3 grounded follow-up questions:
+
+```
+User: "What is Self-RAG?"
+Answer: "Self-RAG is..."
+Follow-ups:
+  1. "How does Self-RAG compare to CRAG?"
+  2. "What are the computational costs of Self-RAG?"
+  3. "Can Self-RAG be combined with web search?"
+```
+
+These are generated from the original answer + source snippets, so they stay relevant
+and grounded. No more random suggestions.
+
+### Resilience & Ops (Production Layer)
+
+Beyond the RAG graphs themselves, the serving path now includes:
+
+- **Redis answer cache** — identical question+mode hits skip retrieval/LLM
+- **Groq LLM fallback** — OpenAI quota/outage retries on a secondary chat provider
+- **Circuit breakers** — NVIDIA rerank and web search fail fast when upstreams are unhealthy
+- **Prometheus metrics** — request latency, cache events, fallbacks, rate-limit hits
+- **SSE streaming** — agent steps and answer tokens as they happen
+
+These don't change *what* Agentic RAG decides; they make the same agent safe and
+observable under real traffic. See [PRODUCTION.md](PRODUCTION.md).
+
+---
+
 ## What You'll Feel in This Project
 
 After building all phases, run the same question through Phase 1 (baseline) and Phase 7 (full agent):
@@ -283,7 +356,7 @@ After building all phases, run the same question through Phase 1 (baseline) and 
  and tell me which pattern Self-RAG uses for grading."
 ```
 
-- **Phase 1 (baseline):** Retrieves 4 chunks, maybe misses Self-RAG details, gives a shallow answer.
-- **Phase 7 (agentic):** Routes → decomposes into 3 sub-questions → retrieves for each → grades docs → synthesizes a complete answer with citations.
+- **Phase 1 (baseline):** Hybrid retrieve → rerank → generate. May still miss multi-part coverage; weaker on comparisons.
+- **Phase 7 (agentic):** Routes → decomposes into 3 sub-questions → retrieves + reranks for each → grades docs → synthesizes a complete answer with **detailed citations**. Generates 3 follow-up questions from the sources.
 
-That difference — **adaptive, self-correcting, multi-step** — is Agentic RAG.
+That difference — **adaptive, self-correcting, multi-step, and grounded** — is Agentic RAG.

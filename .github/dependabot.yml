@@ -1,0 +1,36 @@
+version: 2
+
+# Everything here is pinned, which is only safe if something tells you when a
+# pin goes stale or turns into a CVE.
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      langchain:
+        patterns: ["langchain*", "langgraph*"]
+      dev-tooling:
+        patterns: ["ruff", "pytest*", "pip-audit", "locust"]
+
+  - package-ecosystem: npm
+    directory: "/frontend"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      react:
+        patterns: ["react", "react-dom", "@types/react*"]
+      build-tooling:
+        patterns: ["vite", "@vitejs/*", "typescript", "oxlint"]
+
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly

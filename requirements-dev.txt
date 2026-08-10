@@ -1,0 +1,16 @@
+# Development / CI tooling. Pinned for the same reason as requirements.txt:
+# an unpinned linter or scanner turns CI red on someone else's release day.
+-r requirements.txt
+
+# Lint
+ruff==0.15.15
+
+# Test
+pytest-cov==7.1.0
+pytest-timeout==2.5.0
+
+# Security scanning
+pip-audit==2.9.0
+
+# Load testing (see tests/load/locustfile.py)
+locust==2.42.1

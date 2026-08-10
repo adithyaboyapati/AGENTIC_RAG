@@ -1,0 +1,14 @@
+apiVersion: 1
+
+providers:
+  - name: Agentic RAG
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      # Keep outside /var/lib/grafana so the named volume cannot hide these files
+      path: /etc/grafana/dashboards
+      foldersFromFilesStructure: false

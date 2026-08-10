@@ -199,11 +199,18 @@ class OutputGuardrails:
 
 
 class CostGuardrails:
-    """Tracks and limits token usage and costs (thread-safe, process-wide backstop).
+    """Tracks and limits token usage and costs (thread-safe).
+
+    Uses Redis counters when available so budgets are shared across workers;
+    falls back to in-process lists otherwise.
 
     Usage: call check_query_rate() + check_token_budget() before dispatch,
     record_query() when accepted, record_usage() with actual token counts after.
     """
+
+    _REDIS_QPM = "cost:v1:queries_minute"
+    _REDIS_TOK_MIN = "cost:v1:tokens_minute"
+    _REDIS_TOK_HOUR = "cost:v1:tokens_hour"
 
     def __init__(self):
         """Initialize cost tracker."""
@@ -213,11 +220,40 @@ class CostGuardrails:
         self.query_history: list[tuple[datetime, int, int]] = []  # (timestamp, input_tokens, output_tokens)
         self.query_timestamps: list[datetime] = []
 
+    def _redis(self):
+        backend = (settings.rate_limit_backend or "auto").strip().lower()
+        if backend == "memory":
+            return None
+        try:
+            from src.cache.redis_cache import get_redis_client
+
+            return get_redis_client()
+        except Exception:
+            return None
+
     def check_query_rate(self) -> tuple[bool, list[GuardrailViolation]]:
         """Enforce max queries per minute."""
+        limit = settings.max_queries_per_minute
+        client = self._redis()
+        if client is not None:
+            try:
+                recent = int(client.get(self._REDIS_QPM) or 0)
+                if recent >= limit:
+                    return False, [
+                        GuardrailViolation(
+                            rule="queries_per_minute",
+                            message=f"Rate limit exceeded ({recent} >= {limit} queries/minute)",
+                            severity="error",
+                            value=recent,
+                            limit=limit,
+                        )
+                    ]
+                return True, []
+            except Exception:
+                pass
+
         now = datetime.now()
         one_minute_ago = now - timedelta(minutes=1)
-        limit = settings.max_queries_per_minute
         with self._lock:
             recent = sum(1 for t in self.query_timestamps if t > one_minute_ago)
         if recent >= limit:
@@ -234,6 +270,16 @@ class CostGuardrails:
 
     def record_query(self) -> None:
         """Record a query for rate limiting."""
+        client = self._redis()
+        if client is not None:
+            try:
+                pipe = client.pipeline()
+                pipe.incr(self._REDIS_QPM)
+                pipe.expire(self._REDIS_QPM, 60)
+                pipe.execute()
+            except Exception:
+                pass
+
         now = datetime.now()
         cutoff = now - timedelta(hours=1)
         with self._lock:
@@ -243,6 +289,41 @@ class CostGuardrails:
     def check_token_budget(self) -> tuple[bool, list[GuardrailViolation]]:
         """Reject new work when the minute/hour token budget is already spent."""
         violations: list[GuardrailViolation] = []
+        client = self._redis()
+        if client is not None:
+            try:
+                minute_tokens = int(client.get(self._REDIS_TOK_MIN) or 0)
+                hourly_tokens = int(client.get(self._REDIS_TOK_HOUR) or 0)
+                if minute_tokens >= settings.max_tokens_per_minute:
+                    violations.append(
+                        GuardrailViolation(
+                            rule="tokens_per_minute",
+                            message=(
+                                f"Minute token budget exhausted "
+                                f"({minute_tokens} >= {settings.max_tokens_per_minute})"
+                            ),
+                            severity="error",
+                            value=minute_tokens,
+                            limit=settings.max_tokens_per_minute,
+                        )
+                    )
+                if hourly_tokens >= settings.max_tokens_per_hour:
+                    violations.append(
+                        GuardrailViolation(
+                            rule="tokens_per_hour",
+                            message=(
+                                f"Hour token budget exhausted "
+                                f"({hourly_tokens} >= {settings.max_tokens_per_hour})"
+                            ),
+                            severity="error",
+                            value=hourly_tokens,
+                            limit=settings.max_tokens_per_hour,
+                        )
+                    )
+                return len(violations) == 0, violations
+            except Exception:
+                pass
+
         now = datetime.now()
         one_minute_ago = now - timedelta(minutes=1)
         one_hour_ago = now - timedelta(hours=1)
@@ -275,20 +356,58 @@ class CostGuardrails:
 
     def record_usage(self, input_tokens: int, output_tokens: int) -> None:
         """Record actual token usage after a query completes."""
+        total = max(0, int(input_tokens)) + max(0, int(output_tokens))
+        client = self._redis()
+        if client is not None and total:
+            try:
+                pipe = client.pipeline()
+                pipe.incrby(self._REDIS_TOK_MIN, total)
+                pipe.expire(self._REDIS_TOK_MIN, 60)
+                pipe.incrby(self._REDIS_TOK_HOUR, total)
+                pipe.expire(self._REDIS_TOK_HOUR, 3600)
+                pipe.execute()
+            except Exception:
+                pass
+
         now = datetime.now()
         cutoff = now - timedelta(hours=1)
         with self._lock:
             self.query_history.append((now, input_tokens, output_tokens))
             self.query_history = [(t, i, o) for t, i, o in self.query_history if t > cutoff]
 
-    def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+    def calculate_cost(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        provider: str = "openai",
+    ) -> float:
         """Calculate cost in USD for token usage."""
-        input_cost = (input_tokens / 1000) * settings.cost_per_1k_input_usd
-        output_cost = (output_tokens / 1000) * settings.cost_per_1k_output_usd
+        if provider == "groq":
+            in_rate = settings.groq_cost_per_1k_input_usd
+            out_rate = settings.groq_cost_per_1k_output_usd
+        else:
+            in_rate = settings.cost_per_1k_input_usd
+            out_rate = settings.cost_per_1k_output_usd
+        input_cost = (input_tokens / 1000) * in_rate
+        output_cost = (output_tokens / 1000) * out_rate
         return input_cost + output_cost
 
     def get_usage_stats(self) -> dict:
         """Get current usage statistics."""
+        client = self._redis()
+        if client is not None:
+            try:
+                return {
+                    "queries_per_minute": int(client.get(self._REDIS_QPM) or 0),
+                    "tokens_per_minute": int(client.get(self._REDIS_TOK_MIN) or 0),
+                    "tokens_per_hour": int(client.get(self._REDIS_TOK_HOUR) or 0),
+                    "total_queries": int(client.get(self._REDIS_QPM) or 0),
+                    "backend": "redis",
+                }
+            except Exception:
+                pass
+
         now = datetime.now()
         one_minute_ago = now - timedelta(minutes=1)
         one_hour_ago = now - timedelta(hours=1)
@@ -304,6 +423,7 @@ class CostGuardrails:
             "tokens_per_minute": minute_tokens,
             "tokens_per_hour": hour_tokens,
             "total_queries": total,
+            "backend": "memory",
         }
 
 

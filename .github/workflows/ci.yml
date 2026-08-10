@@ -161,7 +161,7 @@ jobs:
           echo "OK: no compiler in runtime image"
 
       - name: Scan image for OS/library vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: agentic-rag:ci
           format: table

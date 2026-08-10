@@ -20,8 +20,10 @@ from src.agents.multi_hop import analyze_chain, reflect_chain
 from src.agents.router import RouteType, router_chain
 from src.chains.generation import direct_chain, synthesis_chain, web_search_chain
 from src.config import settings
+from src.retrieval.citations import build_response, docs_to_sources
 from src.retrieval.retriever import format_docs, retrieve
 from src.schemas import AgentResponse
+from src.streaming import run_graph_streaming, stream_text
 from src.tools.web_search import web_search
 
 
@@ -36,6 +38,7 @@ class MultiHopState(TypedDict):
     question: str
     route: str
     route_reason: str
+    skip_router: bool
     needs_multi_hop: bool
     multi_hop_reason: str
     current_hop: int
@@ -48,6 +51,10 @@ class MultiHopState(TypedDict):
 
 
 def classify_node(state: MultiHopState) -> dict:
+    if state.get("skip_router") and state.get("route"):
+        return {
+            "steps": [f"Router skipped (parent set route={state['route']})"],
+        }
     decision = router_chain.invoke({"question": state["question"]})
     return {
         "route": decision.route.value,
@@ -57,13 +64,15 @@ def classify_node(state: MultiHopState) -> dict:
 
 
 def direct_answer_node(state: MultiHopState) -> dict:
-    answer = direct_chain.invoke({"question": state["question"]})
+    answer = stream_text(direct_chain, {"question": state["question"]})
     return {"answer": answer, "sources": [], "steps": ["Direct answer (no retrieval)"]}
 
 
 def web_search_node(state: MultiHopState) -> dict:
     context = web_search.invoke(state["question"])
-    answer = web_search_chain.invoke({"context": context, "question": state["question"]})
+    answer = stream_text(
+        web_search_chain, {"context": context, "question": state["question"]}
+    )
     return {
         "answer": answer,
         "sources": ["web search"],
@@ -149,11 +158,10 @@ def reflect_node(state: MultiHopState) -> dict:
 def synthesize_node(state: MultiHopState) -> dict:
     """Combine all hop contexts into a final answer."""
     context_parts = []
-    all_sources: set[str] = set()
+    all_docs: list[Document] = []
 
     for hop in state["hop_results"]:
-        for doc in hop["documents"]:
-            all_sources.add(doc.metadata.get("source", "unknown"))
+        all_docs.extend(hop["documents"])
         context_parts.append(
             f"## Hop {hop['hop_number']}: {hop['search_query']}\n"
             f"Finding: {hop['finding']}\n"
@@ -161,11 +169,13 @@ def synthesize_node(state: MultiHopState) -> dict:
         )
 
     combined = "\n\n".join(context_parts)
-    answer = synthesis_chain.invoke({"question": state["question"], "context": combined})
+    answer = stream_text(
+        synthesis_chain, {"question": state["question"], "context": combined}
+    )
 
     return {
         "answer": answer,
-        "sources": list(all_sources),
+        "sources": docs_to_sources(all_docs),
         "steps": [f"Synthesized answer from {len(state['hop_results'])} hop(s)"],
     }
 
@@ -240,11 +250,13 @@ def get_multi_hop_graph():
 def ask_multi_hop(question: str) -> AgentResponse:
     """Run the Phase 5 multi-hop retrieval agent."""
     graph = get_multi_hop_graph()
-    result = graph.invoke(
+    result = run_graph_streaming(
+        graph,
         {
             "question": question,
             "route": "",
             "route_reason": "",
+            "skip_router": False,
             "needs_multi_hop": False,
             "multi_hop_reason": "",
             "current_hop": 0,
@@ -254,12 +266,14 @@ def ask_multi_hop(question: str) -> AgentResponse:
             "answer": "",
             "sources": [],
             "steps": [],
-        }
+        },
     )
     hop_queries = [h["search_query"] for h in result.get("hop_results", [])]
-    return AgentResponse(
+    docs = [doc for hop in result.get("hop_results", []) for doc in hop["documents"]]
+    return build_response(
         answer=result["answer"],
         mode="multi_hop",
+        docs=docs,
         sources=result.get("sources", []),
         route=result.get("route"),
         route_reason=result.get("route_reason"),

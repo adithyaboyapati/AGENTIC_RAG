@@ -12,9 +12,24 @@ pip install -r requirements.txt
 
 # 2. Set up environment
 cp .env.example .env
-# Edit .env with your OpenAI API key
+# Edit .env with:
+#   - OPENAI_API_KEY (required)
+#   - NVIDIA_API_KEY (recommended for reranking — from https://build.nvidia.com)
+#   - GROQ_API_KEY (optional — auto-fallback when OpenAI rate-limits / fails)
 
-# 3. Ingest documents (already done with rag.pdf)
+# 3. Optional: configure ingestion / retrieval / rerank / cache / guardrails
+# Edit .env to adjust:
+#   - CHUNKING_STRATEGY: section_parent_child (default) or fixed
+#   - CLEANSE_ENABLED: true (removes headers/footers) or false
+#   - RETRIEVAL_SEARCH_TYPE: hybrid (default), similarity, or mmr
+#   - RERANK_PROVIDER: nvidia (default) or flashrank (local)
+#   - RERANK_MODEL: nvidia/llama-nemotron-rerank-vl-1b-v2
+#   - CACHE_ENABLED / REDIS_URL: answer cache (needs Redis running)
+#   - RATE_LIMIT_BACKEND: auto | redis | memory
+#   - QUALITY_GUARDRAILS_ENABLED: enable extra LLM quality checks
+# See src/config.py for all options
+
+# 4. Ingest documents (already done with rag.pdf)
 python -m src.ingestion.ingest --source data/sample_docs
 ```
 
@@ -22,19 +37,28 @@ python -m src.ingestion.ingest --source data/sample_docs
 
 ## Run the System
 
-### Option A: Interactive Streamlit App (Recommended)
+### Option A: React Frontend (Recommended)
+
+```bash
+# Terminal 1 — API
+uvicorn src.api.server:app --reload --port 8000
+
+# Terminal 2 — UI
+cd frontend && npm install && npm run dev
+```
+
+Opens http://localhost:5173 with mode selector, chat, agent traces, and memory controls.
+Details: [frontend/README.md](../frontend/README.md).
+
+### Option B: Streamlit App
 
 ```bash
 streamlit run streamlit_app.py
 ```
 
-Opens browser at http://localhost:8501 with:
-- Mode selector (7 options)
-- Chat interface
-- Real-time agent traces
-- Visualization of routes, decompositions, hops
+Opens http://localhost:8501 with the same modes and traces.
 
-### Option B: Command Line
+### Option C: CLI
 
 ```bash
 # List available modes
@@ -53,13 +77,13 @@ python -m src.cli ask "What is Self-RAG?" --mode crag -v
 #  - agentic: Unified orchestrator (picks best strategy)
 ```
 
-### Option C: REST API
+### Option D: REST API
 
 ```bash
 # Start server
 python -m uvicorn src.api.server:app --reload --port 8000
 
-# Query the API
+# Sync query (full JSON when complete)
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{
@@ -67,12 +91,29 @@ curl -X POST http://localhost:8000/query \
     "mode": "crag"
   }' | jq
 
-# Check modes
+# Streaming query (SSE: steps + answer tokens as they arrive)
+# The React frontend uses this endpoint by default.
+curl -N http://localhost:8000/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question": "What is Self-RAG?", "mode": "agentic"}'
+
+# Check modes (requires X-API-Key header if REQUIRE_API_KEY=true)
 curl http://localhost:8000/modes
 
-# Health check
+# Liveness (always unauthenticated)
 curl http://localhost:8000/health
+
+# Readiness — checks Chroma, OpenAI config, Redis, optional deps
+curl http://localhost:8000/health/ready
+
+# Prometheus metrics (scraped by monitoring/prometheus.yml)
+curl http://localhost:8000/metrics
 ```
+
+> By default (`REQUIRE_API_KEY=false` in `.env.example`), no key is needed locally. Once
+> `ENVIRONMENT=production`, the server requires `API_KEY` and refuses to start without it
+> — see [PRODUCTION.md](PRODUCTION.md). Requests are also rate-limited per client
+> (`MAX_QUERIES_PER_MINUTE_PER_CLIENT`) — see [GUARDRAILS.md](GUARDRAILS.md).
 
 ---
 
@@ -116,7 +157,13 @@ Watch: System analyzes complexity and picks optimal strategy.
 ## Evaluate System Quality
 
 ```bash
-# Run comprehensive RAGAS-inspired evaluation
+# Offline golden-set gate (no API calls — also runs in CI)
+python -m src.evaluation.retrieval_metrics --offline
+
+# Retrieval metrics vs data/eval/golden_qa.json (needs ingested corpus)
+python -m src.evaluation.retrieval_metrics
+
+# Run comprehensive RAGAS-inspired evaluation across all modes
 python -m src.evaluation.evaluate_all_modes
 
 # View results
@@ -144,61 +191,58 @@ for mode in sorted(modes.keys()):
 
 ```
 Agentic_RAG/
+├── frontend/                    # React + Vite chat UI (primary)
+├── monitoring/                  # Prometheus + Grafana provisioning
 ├── src/
-│   ├── config.py                 # Configuration
-│   ├── llm.py                    # Shared LLM instance
-│   ├── schemas.py                # Pydantic models
-│   ├── prompts.py                # All prompt templates
-│   ├── ingestion/
-│   │   └── ingest.py            # PDF → chunks → vectors
-│   ├── retrieval/
-│   │   └── retriever.py         # Vector store access
-│   ├── tools/
-│   │   ├── web_search.py        # DuckDuckGo tool
-│   │   └── all_tools.py         # Centralized tool definitions
-│   ├── chains/
-│   │   └── generation.py        # LCEL chains (RAG, synthesis, etc.)
-│   ├── agents/
-│   │   ├── router.py            # Phase 2: Query router
-│   │   ├── grader.py            # Phase 3: Document grader
-│   │   ├── query_rewriter.py    # Phase 3: Query rewriter
-│   │   ├── decomposer.py        # Phase 4: Query decomposer
-│   │   ├── multi_hop.py         # Phase 5: Multi-hop analyzer
-│   │   └── orchestrator.py      # Phase 7: Strategy picker
-│   ├── graph/
-│   │   ├── router_graph.py      # Phase 2: LangGraph
-│   │   ├── crag_graph.py        # Phase 3: LangGraph
-│   │   ├── decompose_graph.py   # Phase 4: LangGraph
-│   │   ├── multi_hop_graph.py   # Phase 5: LangGraph
-│   │   ├── tools_graph.py       # Phase 6: LangGraph
-│   │   └── agent_graph.py       # Phase 7: LangGraph
-│   ├── rag/
-│   │   └── baseline.py          # Phase 1: Baseline RAG
-│   ├── runner.py                # Unified dispatcher
-│   ├── cli.py                   # Command-line interface
+│   ├── config.py                 # env-driven settings
+│   ├── llm.py                    # OpenAI primary + optional Groq fallback
+│   ├── schemas.py                # AgentResponse, Citation
+│   ├── prompts.py                # ChatPromptTemplate library
+│   ├── guardrails.py / privacy.py
+│   ├── runner.py                 # Dispatch: guardrails, cache, memory, modes
+│   ├── streaming.py              # SSE step/token emitter
+│   ├── cache/redis_cache.py      # Answer cache + idempotency
+│   ├── resilience/circuit_breaker.py
+│   ├── ingestion/                # cleanse, chunking, parent_store, ingest
+│   ├── retrieval/                # hybrid/MMR, reranker, citations
+│   ├── memory/                   # compact packing + optional Supabase
+│   ├── agents/                   # router, grader, followups, …
+│   ├── graph/                    # LangGraph per mode
+│   ├── tools/                    # retrieve_docs, web_search, calculator
+│   ├── rag/baseline.py
 │   ├── api/
-│   │   └── server.py            # FastAPI REST server
+│   │   ├── server.py             # /query, /query/stream, /health*, /metrics
+│   │   ├── rate_limit.py         # Redis or memory sliding window
+│   │   ├── metrics.py            # Prometheus instrumentation
+│   │   ├── security.py / health.py
 │   └── evaluation/
-│       ├── metrics.py           # Phase 8: RAGAS-inspired metrics
-│       └── evaluate_all_modes.py# Phase 8: Comprehensive evaluation
-├── streamlit_app.py             # Phase 6: Web UI
-├── docs/
-│   ├── CONCEPTS.md              # Learning concepts
-│   ├── ROADMAP.md               # Phase-by-phase guide
-│   └── LANGCHAIN_STACK.md       # Architecture reference
+│       ├── metrics.py            # RAGAS-inspired LLM-as-judge
+│       ├── retrieval_metrics.py  # Golden-set hit/recall/MRR
+│       └── evaluate_all_modes.py
 ├── data/
-│   ├── sample_docs/
-│   │   └── rag.pdf             # Knowledge base
-│   └── chroma_db/              # Vector store (auto-created)
-├── requirements.txt             # Python dependencies
-├── .env.example                 # Environment template
-├── Dockerfile                   # Production container
-├── docker-compose.yml           # Local deployment
-├── README.md                    # Project overview
-├── PRODUCTION.md                # Deployment guide
-├── EVALUATION_REPORT.md         # Phase 8 results
-└── QUICK_START.md              # This file
+│   ├── sample_docs/rag.pdf
+│   ├── eval/golden_qa.json       # Retrieval golden set (CI offline gate)
+│   ├── chroma_db/                # Local Chroma (compose uses HTTP server)
+│   └── parent_store.json
+├── tests/
+├── streamlit_app.py              # Legacy UI
+├── docker-compose.yml            # API + Redis + Chroma + frontend (+ Prometheus/Grafana)
+├── Dockerfile
+├── .github/workflows/ci.yml      # Lint + pytest + golden gate + frontend + Docker
+└── docs/                         # CONCEPTS, ROADMAP, PRODUCTION, …
 ```
+
+### Full stack with Docker Compose
+
+```bash
+cp .env.production.example .env.production
+# fill OPENAI_API_KEY, NVIDIA_API_KEY, API_KEY, …
+
+docker compose up -d                 # redis, chroma, API, frontend (:8080)
+docker compose up prometheus grafana -d   # optional observability (:9090, :3000)
+```
+
+See [PRODUCTION.md](PRODUCTION.md) for ports, cache behavior, and the Grafana dashboard.
 
 ---
 
@@ -281,6 +325,21 @@ export OPENAI_API_KEY="sk-..."
 # Or set in .env file
 ```
 
+### Reranking skipped / falling back to FlashRank
+```bash
+# Ensure NVIDIA key is set (no space after =) and provider matches
+# NVIDIA_API_KEY=nvapi-...
+# RERANK_PROVIDER=nvidia
+# RERANK_MODEL=nvidia/llama-nemotron-rerank-vl-1b-v2
+
+# Or use local rerank without NVIDIA:
+# RERANK_PROVIDER=flashrank
+# RERANK_MODEL=ms-marco-MiniLM-L-12-v2
+
+# Disable rerank entirely:
+# RERANK_ENABLED=false
+```
+
 ### "ChromaDB connection error"
 ```bash
 # Clear and reingest
@@ -306,12 +365,12 @@ python -m src.ingestion.ingest --source data/sample_docs
 
 ## Additional Resources
 
-- **Learning Path**: `docs/ROADMAP.md` (phases 0-8)
-- **Architecture**: `docs/LANGCHAIN_STACK.md`
-- **Production Deployment**: `PRODUCTION.md`
-- **Evaluation Results**: `EVALUATION_REPORT.md`
-- **Concepts & Theory**: `docs/CONCEPTS.md`
-
----
-
-**Happy learning! 🚀**
+- **Learning Path**: [ROADMAP.md](ROADMAP.md) (phases 0–9, all complete)
+- **Architecture**: [LANGCHAIN_STACK.md](LANGCHAIN_STACK.md)
+- **Production Deployment**: [PRODUCTION.md](PRODUCTION.md) (Docker, Redis cache, Prometheus/Grafana)
+- **Guardrails & Rate Limiting**: [GUARDRAILS.md](GUARDRAILS.md)
+- **Privacy & PII/PHI**: [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md)
+- **Observability**: [LANGSMITH_TRACING.md](LANGSMITH_TRACING.md)
+- **Concepts & Theory**: [CONCEPTS.md](CONCEPTS.md)
+- **Frontend**: [../frontend/README.md](../frontend/README.md)
+- **Historical build reports**: `docs/archive/` (point-in-time snapshots, not maintained)

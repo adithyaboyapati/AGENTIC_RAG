@@ -1,0 +1,57 @@
+name: Nightly retrieval eval
+
+# The CI gate only validates the golden file's schema offline. This job runs
+# real retrieval against a freshly ingested index and fails when quality
+# regresses — otherwise a chunking or reranker change can tank recall while CI
+# stays green.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      min_recall:
+        description: "Minimum mean recall@k"
+        default: "0.70"
+      min_mrr:
+        description: "Minimum mean MRR"
+        default: "0.50"
+
+permissions:
+  contents: read
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    # Skipped automatically on forks, where the API key secret is absent.
+    if: github.repository_owner != ''
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ingest corpus
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python -m src.ingestion.ingest --source data/sample_docs --reset
+
+      - name: Golden-set retrieval metrics
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          MIN_RECALL: ${{ inputs.min_recall || '0.70' }}
+          MIN_MRR: ${{ inputs.min_mrr || '0.50' }}
+        run: python -m src.evaluation.retrieval_metrics --gate
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: retrieval-report
+          path: eval_results/
+          if-no-files-found: ignore

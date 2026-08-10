@@ -1,6 +1,8 @@
-# Production Guardrails — Safety, Quality, and Cost Control
+# Production Guardrails — Safety, Rate Limiting, and Cost Control
 
-**Purpose**: Protect your production system with automatic safety checks, cost limits, and quality standards.
+**Purpose**: Protect the production system with automatic safety checks, rate limits, and
+cost controls. All of this is enforced identically in the CLI, FastAPI, React UI, and
+Streamlit — via the single choke point `src.runner.run_agent` / `stream_agent`.
 
 ---
 
@@ -8,43 +10,88 @@
 
 Guardrails are **automatic safety gates** that prevent:
 
-✅ **Invalid Input** — Malicious or malformed questions  
-✅ **Cost Overruns** — Excessive token usage and expenses  
-✅ **Quality Failures** — Low-quality or unsafe answers  
-✅ **Resource Exhaustion** — Rate limiting and DOS prevention  
+✅ **Invalid or dangerous input** — malformed questions, credential leakage
+✅ **Cost overruns** — excessive token usage and runaway spend
+✅ **Resource exhaustion** — per-client and process-wide rate limiting
+✅ **Low-quality output** — missing sources, degenerate answers, ungrounded claims
+
+They live in two layers:
+
+| Layer | Where | Scope |
+|-------|-------|-------|
+| Per-client rate limiting | `src/api/rate_limit.py` | HTTP only — keyed by API key or IP (Redis or memory) |
+| Input/output/cost guardrails | `src/guardrails.py` | Shared by CLI, API, React UI, Streamlit via `run_agent` |
 
 ---
 
-## Four Guardrail Categories
+## Request Flow (in `src/runner.py`)
 
-### 1. Input Guardrails
+Every call to `run_agent()` executes guardrails in this order, **before** the LLM is ever
+invoked for the user's actual question:
 
-**What They Check**:
-- Question length (3–3000 characters)
-- Word count (max 500 words)
-- Blocked keywords (secrets, passwords, keys)
-- Character validation
+1. **Privacy check on input** — block if PII is present (see [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md))
+2. **Input guardrails** — length, word count, credential-pattern detection
+3. **Query-rate check** — process-wide queries/minute budget
+4. **Token-budget check** — process-wide tokens/minute and tokens/hour budget
+5. Dispatch to the selected mode, **tracking actual token usage** via LangChain's OpenAI callback
+6. **Output guardrails** — length, presence of sources, citation extraction
+7. **Privacy check on output** — redact or block PII/PHI per policy
+8. (Optional) **Quality guardrails** — validate answer quality per configurable thresholds
 
-**Configuration** (`src/guardrails.py`):
+Steps 2–4 raise `ValueError` (guardrail violation) or `RateLimitError` (rate/budget
+exceeded, mapped to HTTP 429 by the API layer). Callers should catch both:
+
 ```python
-class InputGuardrails:
-    MAX_QUESTION_LENGTH = 500      # words
-    MAX_QUESTION_CHARS = 3000      # characters
-    MIN_QUESTION_CHARS = 3         # characters
-    BLOCKED_KEYWORDS = [
-        "secret", "password", "api_key", "token",
-        "confidential", "private_key"
-    ]
+from src.guardrails import RateLimitError
+from src.runner import run_agent
+
+try:
+    result = run_agent(question, mode="crag")
+except RateLimitError as e:
+    ...  # 429 — back off and retry later
+except ValueError as e:
+    ...  # 400 — fix the input
 ```
 
-**Usage**:
+---
+
+## 1. Input Guardrails
+
+**What They Check** (`src/guardrails.py::InputGuardrails`):
+- Question length: 3–3000 characters
+- Word count: max 500 words
+- **Credential-shaped strings** — not a keyword blocklist
+
+### Why not a keyword blocklist?
+
+An earlier version blocked any question containing words like `"secret"`, `"password"`,
+or `"token"`. That rejected entirely legitimate questions — e.g. *"What is a token limit
+in LLMs?"* — with no security benefit, since blocking the word "password" doesn't stop
+someone from actually pasting a password.
+
+Instead, `InputGuardrails.CREDENTIAL_PATTERNS` matches the **shape of real credentials**:
+
+```python
+CREDENTIAL_PATTERNS = [
+    ("openai_key",        r"\bsk-[A-Za-z0-9_-]{16,}\b"),
+    ("aws_access_key",    r"\bAKIA[0-9A-Z]{16}\b"),
+    ("github_token",      r"\bgh[pousr]_[A-Za-z0-9]{36,}\b"),
+    ("private_key_block", r"-----BEGIN [A-Z ]*PRIVATE KEY-----"),
+    ("password_assignment", r"\bpassword\s*[:=]\s*\S+"),
+    ("api_key_assignment",  r"\bapi[_-]?key\s*[:=]\s*\S+"),
+    ("bearer_token",        r"\bBearer\s+[A-Za-z0-9._~+/-]{20,}"),
+]
+```
+
 ```python
 from src.guardrails import InputGuardrails
 
-valid, violations = InputGuardrails.validate(user_question)
-if not valid:
-    for v in violations:
-        print(f"❌ {v.rule}: {v.message}")
+# Passes — legitimate question about tokens
+InputGuardrails.validate("What is a token limit in LLMs?")  # (True, [])
+
+# Blocked — looks like an actual leaked credential
+InputGuardrails.validate("my key is sk-abcdefghijklmnop1234567890")
+# (False, [GuardrailViolation(rule="blocked_keyword", ...)])
 ```
 
 **Example Violations**:
@@ -52,464 +99,296 @@ if not valid:
 ❌ min_length: Question too short (minimum 3 characters)
 ❌ max_length: Question too long (maximum 3000 characters)
 ❌ max_words: Question too many words (maximum 500)
-❌ blocked_keyword: Question contains blocked keyword: 'secret'
+❌ blocked_keyword: Question appears to contain a credential (openai_key) — remove it
 ```
 
 ---
 
-### 2. Output Guardrails
+## 2. Output Guardrails
 
-**What They Check**:
+**What They Check** (`src/guardrails.py::OutputGuardrails`):
 - Answer length (10–10,000 characters)
 - Presence of sources
-- Confidence scores
-- Content validation
+- Confidence score, if supplied
+- **Citation extraction** — validated chunk IDs, source documents, page numbers
 
-**Configuration** (`src/guardrails.py`):
 ```python
 class OutputGuardrails:
-    MIN_ANSWER_CHARS = 10          # minimum answer length
-    MAX_ANSWER_CHARS = 10000       # maximum answer length
-    MIN_CONFIDENCE = 0.5           # 0.0-1.0 score
+    MIN_ANSWER_CHARS = 10
+    MAX_ANSWER_CHARS = 10000
+    MIN_CONFIDENCE = 0.5
 ```
 
-**Usage**:
 ```python
 from src.guardrails import OutputGuardrails
 
 valid, violations = OutputGuardrails.validate(
     answer=generated_answer,
     confidence=0.8,
-    sources=retrieved_docs
+    sources=retrieved_docs,
+    citations=citation_list,  # new: Citation dataclass instances
 )
 ```
 
-**Example Violations**:
-```
-⚠️  min_answer_length: Answer too short (minimum 10 characters)
-⚠️  max_answer_length: Answer too long (maximum 10000 characters)
-⚠️  low_confidence: Confidence score too low (minimum 0.5)
-⚠️  no_sources: Answer has no retrieved sources
-```
+All output-guardrail violations are currently **warnings** (logged, not blocking) — a
+short or sourceless answer still reaches the user, but is flagged for review in logs.
+
+Citations are **always extracted** (via `src/retrieval/citations.py`) so frontend and
+evaluation pipeline have detailed source attribution (chunk ID, snippet, page, section).
 
 ---
 
-### 3. Cost Guardrails
+## 3. Rate Limiting
 
-**What They Track**:
-- Tokens per query
-- Tokens per minute
-- Tokens per hour
-- Cost in USD
+### Per-client (HTTP layer — `src/api/rate_limit.py`)
 
-**Configuration** (`src/guardrails.py`):
+A sliding-window limiter keyed by API key (if present) or client IP, applied as a FastAPI
+dependency on `/query` and `/query/stream`:
+
 ```python
-class CostGuardrails:
-    MAX_TOKENS_PER_QUERY = 2000       # per single query
-    MAX_TOKENS_PER_MINUTE = 10000     # per 60 seconds
-    MAX_TOKENS_PER_HOUR = 100000      # per 3600 seconds
-    MAX_QUERIES_PER_MINUTE = 60       # rate limit
-    
-    # OpenAI pricing (GPT-4)
-    COST_PER_1K_INPUT = 0.03
-    COST_PER_1K_OUTPUT = 0.06
+from src.api.rate_limit import enforce_client_rate_limit
+
+@app.post("/query")
+async def query(request: QueryRequest, _rate: None = Depends(enforce_client_rate_limit)):
+    ...
 ```
 
-**Usage**:
+Exceeding the limit returns **HTTP 429** with a `Retry-After` header. Configure via:
+
+```bash
+MAX_QUERIES_PER_MINUTE_PER_CLIENT=20
+# auto — use Redis if reachable, else memory | redis | memory
+RATE_LIMIT_BACKEND=auto
+REDIS_URL=redis://localhost:6379/0
+```
+
+With `RATE_LIMIT_BACKEND=auto` (default) or `redis`, counters live in Redis and are shared
+across API workers/replicas. If Redis is unreachable, the limiter falls back to in-memory
+(per-process). Set `RATE_LIMIT_BACKEND=memory` explicitly for local tests / CI.
+`docker-compose.yml` sets `RATE_LIMIT_BACKEND=redis` for the API service.
+
+### Process-wide (shared layer — `src/guardrails.py::CostGuardrails`)
+
+A backstop shared by every interface (CLI, API, Streamlit), regardless of who's calling:
+
+```python
+class CostGuardrails:
+    def check_query_rate(self) -> tuple[bool, list[GuardrailViolation]]: ...
+    def record_query(self) -> None: ...
+```
+
+Configure via `MAX_QUERIES_PER_MINUTE` (process-wide; distinct from the per-client limit
+above).
+
+---
+
+## 4. Cost Guardrails (Token Budget)
+
+**What They Track** (`src/guardrails.py::CostGuardrails`):
+- Actual tokens used per query (via LangChain's OpenAI callback, not an estimate)
+- Tokens per minute / tokens per hour, checked as a budget **before** each new query
+- Cost in USD, using configurable per-1K-token pricing
+
+```python
+class CostGuardrails:
+    def check_token_budget(self) -> tuple[bool, list[GuardrailViolation]]:
+        """Reject new work if the minute/hour token budget is already spent."""
+
+    def record_usage(self, input_tokens: int, output_tokens: int) -> None:
+        """Record actual usage after a query completes."""
+
+    def calculate_cost(self, input_tokens: int, output_tokens: int) -> float:
+        """USD cost using settings.cost_per_1k_input_usd / cost_per_1k_output_usd."""
+
+    def get_usage_stats(self) -> dict:
+        """{'queries_per_minute', 'tokens_per_minute', 'tokens_per_hour', 'total_queries'}"""
+```
+
+This is wired into `src/runner.py::_run_with_cost_tracking`, which wraps every dispatch in
+`get_openai_callback()`, records the real token counts, and logs cost per query:
+
 ```python
 from src.guardrails import get_cost_tracker
 
 tracker = get_cost_tracker()
 
-# Check before processing
-valid, violations = tracker.check_tokens(
-    input_tokens=150,
-    output_tokens=300
-)
+ok, violations = tracker.check_token_budget()
+if not ok:
+    raise RateLimitError(violations[0].message)
 
-# Calculate cost
-cost = tracker.calculate_cost(input_tokens=150, output_tokens=300)
-print(f"Cost: ${cost:.4f}")
+# ... after the LLM call, with real usage from the callback ...
+tracker.record_usage(input_tokens=cb.prompt_tokens, output_tokens=cb.completion_tokens)
 
-# Get stats
 stats = tracker.get_usage_stats()
-# {
-#   "queries_per_minute": 12,
-#   "tokens_per_minute": 4500,
-#   "tokens_per_hour": 45000,
-#   "total_queries": 450
-# }
+cost = tracker.calculate_cost(cb.prompt_tokens, cb.completion_tokens)
 ```
 
-**Example Violations**:
+**Configuration** (`.env`):
+```bash
+MAX_TOKENS_PER_QUERY=2000     # logged as a warning if exceeded (LLM max_tokens caps output separately)
+MAX_TOKENS_PER_MINUTE=10000
+MAX_TOKENS_PER_HOUR=100000
+COST_PER_1K_INPUT_USD=0.00015   # gpt-4o-mini default pricing
+COST_PER_1K_OUTPUT_USD=0.0006
 ```
-❌ tokens_per_query: Query exceeds token limit (2500 > 2000)
-❌ tokens_per_minute: Minute token limit exceeded (12000 > 10000)
-❌ tokens_per_hour: Hour token limit exceeded (105000 > 100000)
-```
 
----
+### Hard caps at the LLM client level
 
-### 4. Quality Guardrails
+Independent of the tracker above, every chat model (`src/llm.py`) is built with hard
+`timeout`, `max_retries`, and `max_tokens`. The primary provider is OpenAI; when
+`GROQ_API_KEY` is set and `LLM_FALLBACK_ENABLED=true`, failed primary calls (quota /
+rate limit / outage) retry on Groq via LangChain `with_fallbacks`. Embeddings always
+stay on OpenAI.
 
-**What They Check**:
-- Answer faithfulness (grounded in context, no hallucinations)
-- Answer relevance (addresses the question)
-- Context precision (retrieved docs are relevant)
-
-**Configuration** (`src/guardrails.py`):
 ```python
-class QualityGuardrails:
-    MIN_RELEVANCE = 0.6            # answer relevance score
-    MIN_CONTEXT_PRECISION = 0.5    # fraction of relevant docs
-    MIN_FAITHFULNESS = 0.7         # grounding in context
-```
-
-**Usage**:
-```python
-from src.guardrails import QualityGuardrails
-
-valid, violations = QualityGuardrails.validate(
-    faithfulness=0.85,       # RAGAS metric
-    relevance=0.78,          # RAGAS metric
-    context_precision=0.92   # RAGAS metric
+ChatOpenAI(
+    timeout=settings.openai_timeout_seconds,   # default 60s — kills hung calls
+    max_retries=settings.openai_max_retries,   # default 2
+    max_tokens=settings.max_output_tokens,     # default 1024 — caps completion size
 )
+# optional secondary: ChatGroq(...).with_fallbacks wiring in get_llm()
 ```
 
-**Example Violations**:
-```
-⚠️  low_faithfulness: Answer not grounded in context (0.65 < 0.7)
-⚠️  low_relevance: Answer not sufficiently relevant (0.55 < 0.6)
-⚠️  low_context_precision: Retrieved docs not precise (0.4 < 0.5)
-```
+This matters because an API request that times out on the client side
+(`REQUEST_TIMEOUT_SECONDS`) doesn't stop the worker thread — the LLM call itself must have
+its own hard timeout, or an abandoned request keeps billing the provider after the caller
+has already given up. Fallback activations increment `rag_llm_fallback_total` on `/metrics`.
 
 ---
 
 ## Integration Points
 
-### In CLI
+### In CLI (`src/cli.py`)
 ```python
-# src/cli.py automatically enforces guardrails
+from src.guardrails import RateLimitError
 from src.runner import run_agent
 
 try:
     result = run_agent(user_question, mode="crag")
-    # Input guardrails checked automatically
-    # Output guardrails checked automatically
-except ValueError as e:
-    print(f"❌ Guardrail violated: {e}")
+except (ValueError, RateLimitError) as e:
+    console.print(f"[red]{e}[/red]")
+    sys.exit(1)
 ```
 
-### In API
+### In API (`src/api/server.py`)
 ```python
-# src/api/server.py integrates guardrails
-from fastapi import HTTPException
-
-@app.post("/query")
-async def query_endpoint(request: QueryRequest):
-    try:
-        result = run_agent(request.question, request.mode)
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+except RateLimitError as exc:
+    raise HTTPException(status_code=429, detail=str(exc), headers={"Retry-After": "60"})
+except ValueError as exc:
+    raise HTTPException(status_code=400, detail=str(exc))
 ```
 
-### In Streamlit
+### In Streamlit (`streamlit_app.py`)
 ```python
-# streamlit_app.py integrates guardrails
-from src.runner import run_agent
-
-try:
-    result = run_agent(user_input, selected_mode)
-    st.success("✅ Query processed successfully")
-except ValueError as e:
-    st.error(f"❌ {e}")
+except (ValueError, RateLimitError) as exc:
+    st.warning(str(exc))          # guardrail message is user-actionable
+except Exception:
+    st.error("Something went wrong…")  # never show raw exception text
 ```
 
 ---
 
-## Cost Monitoring
+## Quality Guardrails (Optional, Configurable)
 
-### Track Token Usage
+`src/guardrails.py::QualityGuardrails` validates RAGAS-style metrics (faithfulness,
+relevance, context precision) against thresholds. This is available in **two modes**:
 
-```python
-from src.guardrails import get_cost_tracker
+### Offline Mode (Default — `QUALITY_GUARDRAILS_ENABLED=false`)
 
-tracker = get_cost_tracker()
-
-# After each query
-cost = tracker.calculate_cost(input_tokens=150, output_tokens=350)
-print(f"This query cost: ${cost:.4f}")
-
-# Get aggregate stats
-stats = tracker.get_usage_stats()
-print(f"Queries this minute: {stats['queries_per_minute']}")
-print(f"Tokens this hour: {stats['tokens_per_hour']}")
-```
-
-### Cost Calculation
-
-For **OpenAI GPT-4**:
-- Input tokens: $0.03 per 1K tokens
-- Output tokens: $0.06 per 1K tokens
-
-**Example**:
-```
-Input tokens: 150
-Output tokens: 350
-Total tokens: 500
-
-Input cost: (150 / 1000) × $0.03 = $0.0045
-Output cost: (350 / 1000) × $0.06 = $0.021
-Total cost: $0.0255
-```
-
----
-
-## Quality Standards
-
-### RAGAS Metrics Integration
-
-Guardrails use RAGAS evaluation metrics:
+Quality checks are **not** wired into the live request path (to avoid latency/cost).
+Use for offline/batch evaluation with `src/evaluation/metrics.py`:
 
 ```python
-from src.guardrails import QualityGuardrails
 from src.evaluation.metrics import evaluate_metrics
+from src.guardrails import QualityGuardrails
 
-# Evaluate response quality
 metrics = evaluate_metrics(question, answer, context)
-
-# Check against quality guardrails
 valid, violations = QualityGuardrails.validate(
     faithfulness=metrics.faithfulness,
     relevance=metrics.answer_relevance,
-    context_precision=metrics.context_precision
+    context_precision=metrics.context_precision,
 )
-
-if not valid:
-    for v in violations:
-        print(f"⚠️  Quality: {v.message}")
 ```
 
-### Severity Levels
+Run `python -m src.evaluation.evaluate_all_modes` to score all 7 modes this way.
 
-- **Error** — Block the response, reject the query
-- **Warning** — Allow the response, but log the issue
+### Online Mode (Optional — `QUALITY_GUARDRAILS_ENABLED=true`)
 
----
+When enabled, LLM-judged quality checks run on **every query** (adds ~2–3 sec latency
+and extra LLM calls). If quality scores fall below thresholds, answers are flagged for
+review or rejected. Configure via `.env`:
 
-## Configuration Management
-
-### Override Defaults
-
-```python
-from src.guardrails import InputGuardrails, CostGuardrails
-
-# Customize input limits
-InputGuardrails.MAX_QUESTION_CHARS = 5000
-InputGuardrails.MAX_QUESTION_LENGTH = 1000
-
-# Customize cost limits
-CostGuardrails.MAX_TOKENS_PER_QUERY = 3000
-CostGuardrails.MAX_TOKENS_PER_MINUTE = 20000
+```bash
+QUALITY_GUARDRAILS_ENABLED=true
+QUALITY_MIN_FAITHFULNESS=0.7
+QUALITY_MIN_RELEVANCE=0.6
+QUALITY_MIN_CONTEXT_PRECISION=0.5
 ```
 
-### Environment-Based Configuration
+**Trade-off**: Ensures high-quality output but doubles query latency and cost. Recommended for
+quality-critical applications (customer support) where latency is less critical than answer
+correctness.
 
-```python
-# For production (more strict)
-if ENV == "production":
-    CostGuardrails.MAX_TOKENS_PER_MINUTE = 5000
-    QualityGuardrails.MIN_FAITHFULNESS = 0.8
-    
-# For development (more relaxed)
-elif ENV == "development":
-    CostGuardrails.MAX_TOKENS_PER_MINUTE = 100000
-    QualityGuardrails.MIN_FAITHFULNESS = 0.5
+### Golden Retrieval Evaluation
+
+`src/evaluation/retrieval_metrics.py` scores retrieval against `data/eval/golden_qa.json`:
+- **Hit rate** — did any expected keyword / chunk ID appear in the top-k?
+- **Recall@k** — fraction of expected keywords/chunks recovered
+- **MRR** — reciprocal rank of the first relevant hit
+
+```bash
+python -m src.evaluation.retrieval_metrics --offline   # CI gate (no embeddings)
+python -m src.evaluation.retrieval_metrics             # live retrieve vs golden set
 ```
 
----
-
-## Monitoring & Alerts
-
-### Log Violations
-
-```python
-import logging
-
-logger = logging.getLogger(__name__)
-
-valid, violations = InputGuardrails.validate(question)
-for v in violations:
-    if v.severity == "error":
-        logger.error(f"Guardrail violation: {v.rule} - {v.message}")
-    else:
-        logger.warning(f"Guardrail warning: {v.rule} - {v.message}")
-```
-
-### Set Up Alerts
-
-```python
-from src.guardrails import get_cost_tracker
-
-tracker = get_cost_tracker()
-stats = tracker.get_usage_stats()
-
-# Alert if approaching limits
-if stats['tokens_per_hour'] > 80000:  # 80% of limit
-    send_alert("⚠️  Approaching hourly token limit")
-
-if stats['queries_per_minute'] > 50:  # 83% of limit
-    send_alert("⚠️  High query rate")
-```
-
----
-
-## Best Practices
-
-### 1. Validate Early
-```python
-# ✅ Good: Check input before processing
-valid, violations = InputGuardrails.validate(question)
-if not valid:
-    raise ValueError("Invalid input")
-result = run_agent(question, mode)
-
-# ❌ Bad: Process first, validate later
-result = run_agent(question, mode)
-InputGuardrails.validate(question)  # Too late!
-```
-
-### 2. Track Costs Continuously
-```python
-# ✅ Good: Monitor costs throughout execution
-tracker = get_cost_tracker()
-for query in batch_queries:
-    cost = tracker.calculate_cost(tokens_in, tokens_out)
-    total_cost += cost
-
-# ❌ Bad: Only check at the end
-# Already spent money on invalid queries
-```
-
-### 3. Set Reasonable Limits
-```python
-# ✅ Good: Conservative limits with buffer
-MAX_TOKENS_PER_HOUR = 80000  # 80% of budget
-ALERT_THRESHOLD = 0.8
-
-# ❌ Bad: Set limit at max budget
-MAX_TOKENS_PER_HOUR = 100000  # Will hit limit exactly
-```
-
-### 4. Log Everything
-```python
-# ✅ Good: Detailed logging
-logger.info(f"Query: {question[:50]}...")
-logger.info(f"Mode: {mode}")
-logger.info(f"Tokens: {in_tokens} input, {out_tokens} output")
-logger.info(f"Cost: ${cost:.4f}")
-
-# ❌ Bad: Sparse logging
-# Can't debug issues later
-```
+Citations (`src/schemas.py::Citation`) carry chunk ID, page, section, snippet, and score
+so UI and evals can verify grounding independently of the LLM-as-judge metrics above.
 
 ---
 
 ## Testing Guardrails
 
-### Unit Tests
-
-```python
-from src.guardrails import InputGuardrails, OutputGuardrails
-
-def test_input_guardrails():
-    # Too short
-    valid, violations = InputGuardrails.validate("ab")
-    assert not valid
-    assert any(v.rule == "min_length" for v in violations)
-    
-    # Too long
-    valid, violations = InputGuardrails.validate("a" * 4000)
-    assert not valid
-    assert any(v.rule == "max_length" for v in violations)
-    
-    # Valid
-    valid, violations = InputGuardrails.validate("What is RAG?")
-    assert valid
-    assert len(violations) == 0
+```bash
+pytest tests/test_guardrails.py tests/test_api.py -q
 ```
 
-### Integration Tests
-
-```python
-from src.runner import run_agent
-
-def test_guardrails_in_runner():
-    # Should raise ValueError on invalid input
-    with pytest.raises(ValueError):
-        run_agent("secret", mode="crag")
-    
-    # Should succeed on valid input
-    result = run_agent("What is RAG?", mode="crag")
-    assert result.answer
-```
+Key regression tests to be aware of:
+- `test_input_accepts_questions_about_tokens_and_secrets` — guards against reintroducing the old keyword blocklist's false positives.
+- `test_token_budget_blocks_when_exhausted` — guards against the token budget silently doing nothing.
+- `test_query_rate_limit_returns_429` / `test_per_client_rate_limit` — guards against rate limits returning the wrong status code or not being enforced per-client.
 
 ---
 
 ## Production Deployment Checklist
 
-- [ ] Enable all guardrails in production
-- [ ] Set realistic cost limits based on budget
-- [ ] Configure quality thresholds
-- [ ] Set up monitoring and alerts
-- [ ] Log all guardrail violations
-- [ ] Review violations daily
-- [ ] Test guardrails work correctly
-- [ ] Document custom limits
-- [ ] Train team on guardrails
-- [ ] Set up cost tracking dashboard
-
----
-
-## Common Issues
-
-### Issue: Legitimate queries rejected
-**Solution**: Adjust limits carefully, add to whitelist if needed
-```python
-InputGuardrails.BLOCKED_KEYWORDS.remove("sensitive_keyword")
-```
-
-### Issue: Spending too much on tokens
-**Solution**: Lower token limits or optimize prompts
-```python
-CostGuardrails.MAX_TOKENS_PER_QUERY = 1000  # More strict
-```
-
-### Issue: Quality scores too low
-**Solution**: Review retrieved documents, adjust thresholds if appropriate
-```python
-QualityGuardrails.MIN_FAITHFULNESS = 0.6  # More lenient
-```
+- [ ] `REQUIRE_API_KEY=true` and `API_KEY` set (mandatory in production regardless — server refuses to start otherwise)
+- [ ] `MAX_QUERIES_PER_MINUTE_PER_CLIENT` set to a realistic per-user budget
+- [ ] `MAX_TOKENS_PER_MINUTE` / `MAX_TOKENS_PER_HOUR` set based on actual budget
+- [ ] `COST_PER_1K_INPUT_USD` / `COST_PER_1K_OUTPUT_USD` match your actual model's pricing
+- [ ] Decide on quality guardrails: `QUALITY_GUARDRAILS_ENABLED=false` (speed) or `true` (strict quality)
+- [ ] If enabling quality guardrails, set thresholds (`QUALITY_MIN_FAITHFULNESS`, etc.) for your domain
+- [ ] Confirm `429` responses include `Retry-After` and your client honors it
+- [ ] Review guardrail violation logs for false positives after launch
+- [ ] For multiple API workers/replicas, set `RATE_LIMIT_BACKEND=redis` (or leave `auto` with Redis up)
+- [ ] Optional: `CACHE_ENABLED=true` + Redis for identical question+mode answer reuse
+- [ ] Optional: `GROQ_API_KEY` for OpenAI failover
+- [ ] Test citation extraction and source attribution with sample queries
+- [ ] Confirm golden-set gate passes: `python -m src.evaluation.retrieval_metrics --offline`
 
 ---
 
 ## Summary
 
-Guardrails provide **defense-in-depth** for production RAG systems:
+| Guardrail | Protects Against | Enforcement |
+|-----------|-------------------|-------------|
+| **Input** | Credential leakage, malformed input | Blocks (`ValueError`) |
+| **Output** | Sourceless/degenerate answers | Warns (logged); citations tracked |
+| **Per-client rate limit** | One client exhausting shared capacity | Blocks (HTTP 429); Redis-shared when configured |
+| **Process rate/token budget** | Aggregate cost overruns | Blocks (`RateLimitError`) |
+| **LLM timeout/max_tokens** | Runaway/abandoned calls still billing | Hard cap on OpenAI (and Groq fallback) client |
+| **LLM fallback** | OpenAI outage / quota | Retries on Groq when keyed |
+| **Quality** (offline) | Hallucinations, weak retrieval | `evaluate_all_modes` + golden retrieval metrics |
+| **Quality** (online, optional) | Poor answer quality per LLM judge | Blocks/warns when `QUALITY_GUARDRAILS_ENABLED=true` |
 
-| Guardrail | Protects Against | Example |
-|-----------|-----------------|---------|
-| **Input** | Malicious input | Secret disclosure |
-| **Output** | Bad answers | Too short, no sources |
-| **Cost** | Budget overruns | Token limit exceeded |
-| **Quality** | Low-quality answers | Hallucinations |
-
-**All guardrails are automatically enforced in**:
-- CLI (`python -m src.cli ask ...`)
-- API (`POST /query`)
-- Streamlit (`streamlit run streamlit_app.py`)
-
----
-
-**Keep your system safe, fast, and cost-effective!** 🛡️💰📊
+**Enforced identically in CLI, API, React UI, and Streamlit** — all call through
+`src.runner.run_agent` / `stream_agent`.

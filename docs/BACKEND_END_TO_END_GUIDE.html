@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Agentic RAG — System Reference Manual</title>
+<style>
+  @page {
+    size: Letter;
+    margin: 0.65in 0.7in 0.7in 0.7in;
+  }
+  @page :first {
+    margin: 0.9in 0.85in;
+  }
+  :root {
+    --ink: #15202b;
+    --muted: #5a6570;
+    --line: #d8dee6;
+    --soft: #f3f6f8;
+    --teal: #0b4f5c;
+    --teal-deep: #083843;
+    --sand: #f7f1e8;
+    --ok: #1f6b45;
+    --warn: #8a5a12;
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body {
+    margin: 0 auto;
+    max-width: 7.6in;
+    color: var(--ink);
+    font: 10.25pt/1.48 Georgia, "Times New Roman", Times, serif;
+    font-variant-ligatures: none;
+    -webkit-font-feature-settings: "liga" 0, "clig" 0;
+    font-feature-settings: "liga" 0, "clig" 0;
+  }
+  h1, h2, h3, h4 {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    color: var(--teal-deep);
+    page-break-after: avoid;
+    line-height: 1.2;
+    font-variant-ligatures: none;
+  }
+  h1 {
+    font-size: 26pt;
+    letter-spacing: -0.02em;
+    margin: 0 0 0.2em;
+    color: var(--teal);
+  }
+  h2 {
+    font-size: 14.5pt;
+    margin: 1.55em 0 0.45em;
+    padding-bottom: 0.18em;
+    border-bottom: 2px solid var(--teal);
+  }
+  h3 {
+    font-size: 11.5pt;
+    margin: 1.15em 0 0.35em;
+    color: var(--ink);
+  }
+  h4 {
+    font-size: 10.4pt;
+    margin: 0.95em 0 0.25em;
+    color: #243447;
+  }
+  p { margin: 0.35em 0 0.55em; }
+  ul, ol { margin: 0.25em 0 0.7em 1.25em; padding: 0; }
+  li { margin: 0.18em 0; }
+  a { color: var(--teal); text-decoration: none; }
+  strong { font-weight: 700; }
+
+  .cover {
+    min-height: 9.2in;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    page-break-after: always;
+  }
+  .cover-kicker {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9pt;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin-bottom: 0.9em;
+  }
+  .cover h1 {
+    font-size: 30pt;
+    border: none;
+    margin-bottom: 0.25em;
+  }
+  .cover-sub {
+    font-size: 12.5pt;
+    color: var(--muted);
+    max-width: 5.8in;
+    margin: 0 0 1.4em;
+    line-height: 1.4;
+  }
+  .cover-box {
+    background: var(--sand);
+    border-left: 5px solid var(--teal);
+    padding: 0.85em 1em;
+    margin: 0.4em 0 1.4em;
+    font-size: 10pt;
+  }
+  .cover-meta {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 9pt;
+    color: var(--muted);
+    line-height: 1.7;
+  }
+  .cover-meta strong { color: var(--ink); }
+
+  .toc { columns: 2; column-gap: 1.4em; font-size: 9.8pt; }
+  .toc ol { margin-left: 1.1em; }
+  .toc li { break-inside: avoid; margin: 0.22em 0; }
+
+  .lede {
+    font-size: 11pt;
+    color: #2a3540;
+    border-left: 3px solid var(--teal);
+    padding-left: 0.75em;
+    margin: 0.6em 0 1em;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.55em 0 0.95em;
+    font-size: 9.2pt;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    page-break-inside: avoid;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 0.38em 0.48em;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--teal);
+    color: #fff;
+    font-weight: 600;
+  }
+  tr:nth-child(even) td { background: #f7fafb; }
+  td code, th code { font-size: 8.4pt; }
+
+  code, .mono {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 8.7pt;
+  }
+  code {
+    background: var(--soft);
+    padding: 0.05em 0.28em;
+    border-radius: 3px;
+  }
+  pre, .diagram {
+    font-family: "SF Mono", Menlo, Consolas, monospace;
+    font-size: 7.9pt;
+    line-height: 1.38;
+    white-space: pre;
+    overflow: hidden;
+    page-break-inside: avoid;
+    margin: 0.45em 0 0.85em;
+    border-radius: 6px;
+  }
+  pre {
+    background: #17212b;
+    color: #e7eef5;
+    padding: 0.75em 0.85em;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .diagram {
+    background: var(--soft);
+    border: 1px solid var(--line);
+    padding: 0.7em 0.8em;
+    color: #1c2730;
+  }
+
+  .card {
+    border: 1px solid var(--line);
+    border-left: 4px solid var(--teal);
+    background: #f8fbfc;
+    padding: 0.65em 0.8em;
+    margin: 0.55em 0 0.9em;
+    page-break-inside: avoid;
+    font-size: 9.6pt;
+  }
+  .card.warn {
+    border-left-color: #b8860b;
+    background: #fffaf0;
+  }
+  .card.ok {
+    border-left-color: var(--ok);
+    background: #f3faf6;
+  }
+  .card .label {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 7.8pt;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--teal);
+    margin-bottom: 0.2em;
+  }
+  .card.warn .label { color: var(--warn); }
+  .card.ok .label { color: var(--ok); }
+
+  .mode-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.55em;
+    margin-top: 1.2em;
+    page-break-after: avoid;
+  }
+  .badge {
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 8pt;
+    font-weight: 700;
+    background: var(--teal);
+    color: white;
+    padding: 0.18em 0.45em;
+    border-radius: 3px;
+    letter-spacing: 0.03em;
+  }
+  .badge.soft { background: #5f7d86; }
+  .mode-head h3 { margin: 0; }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.7em;
+    margin: 0.5em 0 0.9em;
+  }
+  .two-col > div {
+    border: 1px solid var(--line);
+    background: var(--soft);
+    padding: 0.55em 0.65em;
+    border-radius: 5px;
+    page-break-inside: avoid;
+    font-size: 9.3pt;
+  }
+  .two-col h4 { margin-top: 0; }
+
+  .page-break { page-break-before: always; }
+  .keep { page-break-inside: avoid; }
+
+  .footer-note {
+    margin-top: 1.8em;
+    padding-top: 0.55em;
+    border-top: 1px solid var(--line);
+    font-size: 8.4pt;
+    color: var(--muted);
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .tiny { font-size: 8.8pt; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<section class="cover">
+  <div class="cover-kicker">System Reference Manual</div>
+  <h1>Agentic RAG</h1>
+  <p class="cover-sub">
+    An end-to-end picture of the running system: how a question becomes an answer,
+    how the seven AI agent modes decide and retrieve, and how production layers
+    (guardrails, cache, metrics, deploy) wrap that intelligence.
+  </p>
+
+  <div class="cover-box">
+    <strong>What this document is for.</strong>
+    Keep it beside the repo. It is written from the actual code paths
+    (<code>src/runner.py</code>, <code>src/graph/*</code>, <code>src/api/server.py</code>,
+    ingestion/retrieval, Docker Compose) so you can re-orient quickly months later
+    without re-deriving the architecture from memory.
+  </div>
+
+  <div class="cover-meta">
+    <div><strong>Edition:</strong> August 2026</div>
+    <div><strong>Scope:</strong> Full stack — agents, retrieval, API, frontend, ops</div>
+    <div><strong>Default mode:</strong> <code>agentic</code></div>
+    <div><strong>Canonical entry:</strong> <code>run_agent()</code> / <code>stream_agent()</code></div>
+    <div><strong>Stack:</strong> LangChain · LangGraph · FastAPI · Chroma · OpenAI · Redis · React</div>
+  </div>
+</section>
+
+<!-- ============================================================ -->
+<h2>Contents</h2>
+<ol class="toc">
+  <li>How to read this document</li>
+  <li>System at a glance</li>
+  <li>Layered architecture</li>
+  <li>End-to-end request lifecycle</li>
+  <li>The AI agent system (all 7 modes)</li>
+  <li>Decision chains the agents use</li>
+  <li>Ingestion &amp; retrieval pipeline</li>
+  <li>Generation, citations, follow-ups, streaming</li>
+  <li>Production envelope</li>
+  <li>API surface &amp; deploy topology</li>
+  <li>Configuration map</li>
+  <li>File ownership quick reference</li>
+  <li>Worked traces</li>
+</ol>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>1. How to read this document</h2>
+
+<p class="lede">
+  Start with §2–§4 for the whole picture. Spend the most time on §5–§6 — that is the
+  AI agent system. Use §7–§11 when debugging ingestion, retrieval, or production.
+  §13 has concrete walkthroughs you can re-run with the CLI.
+</p>
+
+<table>
+  <tr><th>If you need…</th><th>Go to</th></tr>
+  <tr><td>One diagram of the whole product</td><td>§2 System at a glance</td></tr>
+  <tr><td>What happens on every API/CLI call</td><td>§4 Request lifecycle</td></tr>
+  <tr><td>How each agent mode thinks and routes</td><td>§5 AI agent system</td></tr>
+  <tr><td>Why <code>agentic</code> picked decompose vs multi-hop</td><td>§5.7 and §6</td></tr>
+  <tr><td>How PDFs become searchable chunks</td><td>§7 Ingestion &amp; retrieval</td></tr>
+  <tr><td>Auth, rate limits, cache, metrics, Docker</td><td>§9–§10</td></tr>
+</table>
+
+<div class="card warn">
+  <div class="label">Stability note</div>
+  Mode keys (<code>baseline</code> … <code>agentic</code>), graph node names, and the
+  <code>run_agent</code> choke point are the durable contracts. Prompt text and default
+  model names may change; treat them as tunable, not structural.
+</div>
+
+<!-- ============================================================ -->
+<h2>2. System at a glance</h2>
+
+<p>
+  Agentic RAG is a <strong>multi-mode research assistant</strong>. One question can be
+  answered seven different ways — from a fixed retrieve→generate baseline up to a full
+  orchestrator that chooses strategy, grades evidence, and may rewrite or fall back to
+  the web. Every path shares the same retrieval stack, citations, guardrails, and
+  optional Redis cache.
+</p>
+
+<div class="diagram">┌──────────────────────────────────────────────────────────────────────────┐
+│                         CLIENTS                                          │
+│   React UI (:5173 / :8080)   ·   CLI   ·   Streamlit   ·   curl/API     │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │  POST /query  or  /query/stream (SSE)
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  FastAPI  (auth · rate limit · idempotency · timeout · metrics)          │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  run_agent / stream_agent   ← single choke point for ALL interfaces      │
+│  privacy → input guards → cache? → cost budget → memory → MODE → …       │
+└───────────────────────────────┬──────────────────────────────────────────┘
+                                │
+          ┌─────────────────────┼─────────────────────┐
+          ▼                     ▼                     ▼
+   baseline (no graph)    LangGraph modes        agentic (orchestrator
+                          router/crag/…           + CRAG safety net)
+                                │
+                                ▼
+┌──────────────────────────────────────────────────────────────────────────┐
+│  Shared intelligence                                                     │
+│  hybrid retrieve → rerank → parent expand → generate → citations         │
+│  follow-ups · OpenAI(+Groq fallback) · DuckDuckGo web · calculator       │
+└──────────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+          Chroma corpus  ·  Redis cache  ·  Prometheus/Grafana (optional)</div>
+
+<table>
+  <tr><th>Mode key</th><th>Phase</th><th>One-line behavior</th></tr>
+  <tr><td><code>baseline</code></td><td>1</td><td>Always retrieve → generate. No decisions.</td></tr>
+  <tr><td><code>router</code></td><td>2</td><td>Route to direct / retrieve / web.</td></tr>
+  <tr><td><code>crag</code></td><td>3</td><td>Grade docs; rewrite &amp; retry; else web fallback.</td></tr>
+  <tr><td><code>decompose</code></td><td>4</td><td>Split into sub-queries; retrieve in parallel; synthesize.</td></tr>
+  <tr><td><code>multi_hop</code></td><td>5</td><td>Sequential hops; each query depends on prior findings.</td></tr>
+  <tr><td><code>tools</code></td><td>6</td><td>Function-calling loop: retrieve / web / calculator.</td></tr>
+  <tr><td><code>agentic</code></td><td>7</td><td>Router → strategy picker → subgraph → grade → answer.</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>3. Layered architecture</h2>
+
+<p>Think in five layers. Higher layers never bypass lower safety layers.</p>
+
+<table>
+  <tr><th>Layer</th><th>Responsibility</th><th>Primary modules</th></tr>
+  <tr>
+    <td><strong>1. Interface</strong></td>
+    <td>HTTP, CLI, UI. Auth headers, SSE framing, session IDs.</td>
+    <td><code>src/api/server.py</code>, <code>frontend/</code>, <code>src/cli.py</code></td>
+  </tr>
+  <tr>
+    <td><strong>2. Control plane</strong></td>
+    <td>Privacy, input/output guards, cost budgets, cache, memory packing.</td>
+    <td><code>runner.py</code>, <code>guardrails.py</code>, <code>privacy.py</code>, <code>cache/</code></td>
+  </tr>
+  <tr>
+    <td><strong>3. Agent graphs</strong></td>
+    <td>Mode-specific LangGraph StateGraphs (or baseline pipeline).</td>
+    <td><code>src/graph/*</code>, <code>src/rag/baseline.py</code>, <code>src/agents/*</code></td>
+  </tr>
+  <tr>
+    <td><strong>4. Knowledge plane</strong></td>
+    <td>Ingest, hybrid search, rerank, parent expansion, citations.</td>
+    <td><code>src/ingestion/*</code>, <code>src/retrieval/*</code></td>
+  </tr>
+  <tr>
+    <td><strong>5. Model &amp; tools</strong></td>
+    <td>LLM client, structured outputs, tools, web search.</td>
+    <td><code>src/llm.py</code>, <code>src/chains/</code>, <code>src/tools/</code></td>
+  </tr>
+</table>
+
+<div class="card">
+  <div class="label">Hard rule</div>
+  Never call <code>ask_baseline</code>, <code>ask_crag</code>, etc. from a new interface.
+  Always go through <code>run_agent()</code> or <code>stream_agent()</code>. Skipping the
+  runner skips privacy, rate/cost guards, cache, and follow-ups.
+</div>
+
+<!-- ============================================================ -->
+<h2>4. End-to-end request lifecycle</h2>
+
+<h3>4.1 Synchronous path — <code>POST /query</code> → <code>run_agent()</code></h3>
+
+<ol>
+  <li><strong>API gate</strong> — API key (if required), per-client rate limit, optional <code>Idempotency-Key</code>, request timeout.</li>
+  <li><strong>Privacy (input)</strong> — block if disallowed PII/PHI patterns match policy.</li>
+  <li><strong>Input guardrails</strong> — length, word count, credential-shaped strings (not a keyword blocklist).</li>
+  <li><strong>Answer cache</strong> — if <code>CACHE_ENABLED</code> and no memory-bearing history: lookup Redis by normalized <code>question</code> + <code>mode</code>.</li>
+  <li><strong>Cost / rate budget</strong> — process-wide queries-per-minute and token budgets.</li>
+  <li><strong>Memory augment</strong> — pack recent Q+A (+ older questions only) into the effective question when <code>use_memory</code> is on.</li>
+  <li><strong>Mode dispatch</strong> — <code>_dispatch(mode)</code> → the selected graph or baseline pipeline; token usage recorded via OpenAI callback.</li>
+  <li><strong>Output guardrails + privacy</strong> — validate answer/sources; redact or block output PII per settings.</li>
+  <li><strong>Optional quality check</strong> — only if <code>QUALITY_GUARDRAILS_ENABLED=true</code> (extra LLM calls).</li>
+  <li><strong>Follow-ups</strong> — up to 3 grounded questions attached (never fails the request).</li>
+  <li><strong>Cache write</strong> — store serializable response (not full <code>context_docs</code>) when eligible.</li>
+  <li><strong>API response</strong> — <code>QueryResponse</code> with answer, citations, steps, follow-ups, latency, session_id.</li>
+</ol>
+
+<h3>4.2 Streaming path — <code>POST /query/stream</code> → <code>stream_agent()</code></h3>
+
+<p>
+  Same preflight as sync. During the graph run, a ContextVar emitter
+  (<code>src/streaming.py</code>) pushes events. The React UI uses this by default.
+</p>
+
+<table>
+  <tr><th>SSE <code>type</code></th><th>Meaning</th></tr>
+  <tr><td><code>step</code></td><td>Agent/graph progress line (router decision, hop, grade, …)</td></tr>
+  <tr><td><code>token</code></td><td>Final-answer token as it generates</td></tr>
+  <tr><td><code>answer</code></td><td>Full answer text (after generation / post-guards)</td></tr>
+  <tr><td><code>follow_ups</code></td><td>List of follow-up questions</td></tr>
+  <tr><td><code>sources</code></td><td>Source labels + <code>citations</code> array</td></tr>
+  <tr><td><code>done</code></td><td>Terminal frame: latency, session, mode, route, steps</td></tr>
+  <tr><td><code>error</code></td><td>Guardrail / runtime failure</td></tr>
+</table>
+
+<div class="card ok">
+  <div class="label">Cache hit behavior</div>
+  On cache hit, streaming still emits <code>step</code> / <code>answer</code> /
+  <code>follow_ups</code> / <code>sources</code> / <code>done</code> (with
+  <code>cached: true</code>) so the UI path stays identical — without re-running the LLM.
+</div>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>5. The AI agent system</h2>
+
+<p class="lede">
+  This section is the heart of the product. Each mode is a different control policy over
+  the same knowledge plane. Node names below match the compiled LangGraph graphs in
+  <code>src/graph/</code>.
+</p>
+
+<div class="two-col">
+  <div>
+    <h4>What every mode returns</h4>
+    An <code>AgentResponse</code>: <code>answer</code>, <code>mode</code>,
+    <code>sources</code>, <code>citations</code>, <code>steps</code>, optional
+    <code>route</code> / <code>grade_summary</code> / <code>sub_queries</code>, and
+    <code>follow_ups</code> (attached by the runner).
+  </div>
+  <div>
+    <h4>How to choose a mode</h4>
+    Use <code>baseline</code>/<code>router</code> for speed;
+    <code>crag</code> for quality;
+    <code>decompose</code>/<code>multi_hop</code> for structure;
+    <code>tools</code> for mixed tools;
+    <code>agentic</code> when you want the system to pick.
+  </div>
+</div>
+
+<!-- MODE 1 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.1 <code>baseline</code> — Fixed pipeline</h3></div>
+<p>
+  <strong>File:</strong> <code>src/rag/baseline.py</code> · <strong>Not a LangGraph.</strong>
+  Always retrieves, always generates. The control group for every agentic mode.
+</p>
+<div class="diagram">question → retrieve(hybrid→rerank→top_k) → format_docs → rag_chain → AgentResponse</div>
+<p><strong>Use when:</strong> simple factual questions; latency-sensitive traffic; A/B baseline.</p>
+
+<!-- MODE 2 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.2 <code>router</code> — Intent routing</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/router_graph.py</code> ·
+  <strong>Decision:</strong> <code>router_chain</code> → <code>direct</code> | <code>retrieve</code> | <code>web_search</code>
+</p>
+<div class="diagram">START → classify ─┬─ direct ─────────→ direct_answer → END
+                 ├─ retrieve ──→ retrieve → generate → END
+                 └─ web_search → web_search ──────────→ END</div>
+<p><strong>Use when:</strong> greetings and chitchat should skip retrieval; newsy questions need the web.</p>
+
+<!-- MODE 3 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.3 <code>crag</code> — Corrective RAG</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/crag_graph.py</code> ·
+  Adds a <strong>grader loop</strong> after retrieval. Largest quality jump over baseline.
+</p>
+<div class="diagram">START → classify ─┬─ direct → direct_answer → END
+                 ├─ web_search → web_fallback → END
+                 └─ retrieve → grade ─┬─ filtered docs? → generate → END
+                                      ├─ retries left? → rewrite → retrieve  (loop)
+                                      └─ else → web_fallback → END
+
+Defaults: MAX_RETRIEVAL_RETRIES=2 · GRADER_RELEVANCE_THRESHOLD=0.5</div>
+<p><strong>Use when:</strong> answer quality matters and you can afford grading latency.</p>
+
+<!-- MODE 4 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.4 <code>decompose</code> — Parallel sub-queries</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/decompose_graph.py</code> ·
+  Map-reduce via LangGraph <code>Send</code> to <code>retrieve_sub</code> workers.
+</p>
+<div class="diagram">START → classify ─┬─ direct → direct_answer → END
+                 ├─ web → web_search → END
+                 └─ retrieve path → decompose
+                         │
+                         ├─ Send(sub_q1) → retrieve_sub ─┐
+                         ├─ Send(sub_q2) → retrieve_sub ─┼→ synthesize → END
+                         └─ Send(sub_qN) → retrieve_sub ─┘</div>
+<p><strong>Use when:</strong> “Compare X vs Y vs Z”, multi-entity questions known upfront.</p>
+
+<!-- MODE 5 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.5 <code>multi_hop</code> — Sequential reasoning</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/multi_hop_graph.py</code> ·
+  Unlike decompose, hop <em>N+1</em> depends on findings from hop <em>N</em>.
+</p>
+<div class="diagram">START → classify ─┬─ direct → direct_answer → END
+                 ├─ web → web_search → END
+                 └─ analyze → retrieve_hop → reflect ─┬─ sufficient → synthesize → END
+                                                      └─ next hop (until MAX_MULTI_HOP_STEPS)</div>
+<p><strong>Use when:</strong> “What fallback does CRAG use when retrieval fails?” — must learn CRAG first.</p>
+
+<!-- MODE 6 -->
+<div class="mode-head"><span class="badge">MODE</span><h3>5.6 <code>tools</code> — Tool-calling agent</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/tools_graph.py</code> ·
+  Node <code>tools_agent</code> runs an internal loop (≤10 turns) with
+  <code>llm.bind_tools(TOOLS)</code>.
+</p>
+<div class="diagram">START → classify ─┬─ direct → direct_answer → END
+                 ├─ web → web_search → END
+                 └─ tools_agent ⟲ (tool_calls) → END
+
+TOOLS:
+  • retrieve_docs(query)   → vector corpus
+  • web_search(query)      → DuckDuckGo (circuit-breaker wrapped)
+  • calculator(expr)       → AST-restricted arithmetic (no eval())</div>
+<p><strong>Use when:</strong> mixed modalities — math + corpus, or dynamic tool choice.</p>
+
+<!-- MODE 7 -->
+<div class="page-break"></div>
+<div class="mode-head"><span class="badge">MODE</span><h3>5.7 <code>agentic</code> — Full orchestrator (default)</h3></div>
+<p>
+  <strong>File:</strong> <code>src/graph/agent_graph.py</code> ·
+  Combines routing, strategy selection, the four retrieval strategies (as subgraphs/nodes),
+  and a CRAG-style grade/rewrite/fallback safety net on <em>every</em> retrieval path.
+</p>
+
+<div class="diagram">START → classify ─┬─ direct ─────→ direct_answer → END
+                 ├─ web_search ─→ web_search ───→ END
+                 └─ retrieve ───→ strategy
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    ▼                 ▼                 ▼                 ▼
+               decompose         multi_hop           tools        simple_retrieve
+                    │                 │                 │                 │
+                    └─────────────────┴────────┬────────┴─────────────────┘
+                                               ▼
+                                             grade
+                                               │
+                         ┌─────────────────────┼─────────────────────┐
+                         ▼                     ▼                     ▼
+                      generate              rewrite               fallback
+                         │               (re-retrieve              (web, or
+                         │                → grade again)         keep tools
+                         ▼                     │                  answer)
+                        END ←──────────────────┘</div>
+
+<table>
+  <tr><th>Stage</th><th>Decides</th><th>Options</th></tr>
+  <tr><td><code>classify</code></td><td>Do we need the corpus at all?</td><td><code>direct</code> · <code>retrieve</code> · <code>web_search</code></td></tr>
+  <tr><td><code>strategy</code></td><td>How should we retrieve?</td><td><code>decompose</code> · <code>multi_hop</code> · <code>tools</code> · <code>simple</code></td></tr>
+  <tr><td><code>grade</code></td><td>Is evidence good enough?</td><td><code>generate</code> · <code>rewrite</code> · <code>fallback</code></td></tr>
+</table>
+
+<div class="card">
+  <div class="label">Important implementation detail</div>
+  Strategy nodes reuse the Phase 4–6 graphs with <code>skip_router=True</code> and
+  token emission suppressed for nested generation, so the outer graph owns the final
+  streamed answer. After <code>rewrite</code>, the edge is <code>rewrite → grade</code>
+  (rewrite node re-retrieves internally). Tools with an empty grade but a prior tool
+  answer keep that answer instead of forcing web fallback.
+</div>
+
+<!-- ============================================================ -->
+<h2>6. Decision chains the agents use</h2>
+
+<p>
+  Graphs call small LangChain structured-output chains. These are the “brains” inside nodes.
+</p>
+
+<table>
+  <tr><th>Module</th><th>Function / chain</th><th>Produces</th></tr>
+  <tr><td><code>agents/router.py</code></td><td><code>router_chain</code> / <code>classify_query</code></td><td><code>route</code> ∈ {direct, retrieve, web_search} + reason</td></tr>
+  <tr><td><code>agents/grader.py</code></td><td><code>grade_documents</code></td><td>Keep chunks with <code>relevant</code> and score ≥ threshold</td></tr>
+  <tr><td><code>agents/query_rewriter.py</code></td><td><code>rewrite_query</code></td><td>Rewritten search query + reason</td></tr>
+  <tr><td><code>agents/decomposer.py</code></td><td><code>decompose_chain</code></td><td>1–5 <code>sub_queries</code> + reasoning</td></tr>
+  <tr><td><code>agents/multi_hop.py</code></td><td><code>analyze_chain</code>, <code>reflect_chain</code></td><td>First hop plan; continue vs synthesize</td></tr>
+  <tr><td><code>agents/orchestrator.py</code></td><td><code>choose_strategy</code></td><td><code>decompose</code> | <code>multi_hop</code> | <code>tools</code> | <code>simple</code></td></tr>
+  <tr><td><code>agents/followups.py</code></td><td><code>generate_follow_ups</code></td><td>Up to 3 grounded follow-up questions</td></tr>
+</table>
+
+<h3>Strategy selection rubric (<code>agentic</code>)</h3>
+<table>
+  <tr><th>Strategy</th><th>When the orchestrator should pick it</th><th>Example question</th></tr>
+  <tr><td><code>decompose</code></td><td>Comparisons / multiple distinct entities known upfront</td><td>Compare naive, advanced, and modular RAG</td></tr>
+  <tr><td><code>multi_hop</code></td><td>Answer needs fact A before you can search for fact B</td><td>What fallback does CRAG use when retrieval fails?</td></tr>
+  <tr><td><code>tools</code></td><td>Mix of retrieval + math/web/function calling</td><td>What is Self-RAG and what is 20×30?</td></tr>
+  <tr><td><code>simple</code></td><td>Single-topic factual lookup</td><td>What is Self-RAG?</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>7. Ingestion &amp; retrieval pipeline</h2>
+
+<h3>7.1 Ingestion (before any query)</h3>
+<div class="diagram">PDF (PyMuPDF)
+  → cleanse (headers/footers/boilerplate/irrelevant sections)
+  → chunk
+       • section_parent_child (default): TOC/heading parents → child splits
+       • fixed: RecursiveCharacterTextSplitter
+  → save parents → data/parent_store.json
+  → embed (OpenAI) → upsert Chroma (content-hash chunk_id)
+  → invalidate BM25 cache + flush Redis answer cache</div>
+
+<p>
+  <strong>Command:</strong> <code>python -m src.ingestion.ingest --source data/sample_docs</code>
+  · Use <code>--force</code> to rebuild. Compose uses <code>CHROMA_MODE=http</code>;
+  local dev defaults to persistent SQLite under <code>data/chroma_db</code>.
+</p>
+
+<h3>7.2 Retrieval (shared by all modes)</h3>
+<div class="diagram">query
+  → over-fetch candidate_k
+       hybrid (default): dense kNN + BM25 → Reciprocal Rank Fusion
+       or mmr / similarity
+  → optional cross-encoder rerank
+       nvidia (NeMo API, circuit breaker "nvidia_rerank")
+       or flashrank (local ONNX)
+  → truncate to top_k
+  → optional expand_children_to_parents (cap parent_max_chars)
+  → documents for grading / generation / citations</div>
+
+<table>
+  <tr><th>Knob</th><th>Default role</th></tr>
+  <tr><td><code>RETRIEVAL_CANDIDATE_K=20</code></td><td>Over-fetch pool before rerank</td></tr>
+  <tr><td><code>RETRIEVAL_TOP_K=6</code></td><td>Final chunks to the LLM</td></tr>
+  <tr><td><code>RETRIEVAL_SEARCH_TYPE=hybrid</code></td><td>Dense + BM25 + RRF</td></tr>
+  <tr><td><code>RERANK_PROVIDER=nvidia</code></td><td>Cross-encoder rescoring</td></tr>
+  <tr><td><code>EXPAND_TO_PARENT=true</code></td><td>Return parent sections for context</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>8. Generation, citations, follow-ups, streaming</h2>
+
+<h3>8.1 Generation chains</h3>
+<p>
+  LCEL chains in <code>src/chains/generation.py</code>: <code>rag_chain</code>,
+  <code>direct_chain</code>, <code>synthesis_chain</code>, <code>web_search_chain</code>.
+  All use <code>get_llm()</code> from <code>src/llm.py</code>.
+</p>
+
+<h3>8.2 LLM client</h3>
+<ul>
+  <li><strong>Primary:</strong> OpenAI <code>ChatOpenAI</code> with hard <code>timeout</code>, <code>max_retries</code>, <code>max_tokens</code>.</li>
+  <li><strong>Fallback:</strong> if <code>LLM_FALLBACK_ENABLED</code> and <code>GROQ_API_KEY</code> are set, failed primary calls retry on Groq via LangChain <code>with_fallbacks</code>.</li>
+  <li><strong>Embeddings</strong> always stay on OpenAI (even during chat fallback).</li>
+</ul>
+
+<h3>8.3 Citations</h3>
+<p>
+  <code>src/retrieval/citations.py</code> builds <code>Citation</code> objects:
+  <code>index</code>, <code>chunk_id</code>, <code>source</code>, <code>page</code>,
+  <code>section</code>, <code>snippet</code>, <code>score</code>. The frontend renders
+  them; evals use them for grounding checks.
+</p>
+
+<h3>8.4 Follow-ups</h3>
+<p>
+  After every successful run, <code>generate_follow_ups</code> proposes up to three
+  questions grounded in retrieved snippets (or the answer text as fallback). Failures
+  are swallowed so follow-up generation never fails a query.
+</p>
+
+<h3>8.5 Streaming internals</h3>
+<p>
+  <code>src/streaming.py</code> provides a ContextVar emitter,
+  <code>stream_text</code> / <code>stream_llm_message</code> for tokens, and
+  <code>run_graph_streaming</code> for step events as LangGraph nodes complete.
+</p>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>9. Production envelope</h2>
+
+<p>Everything outside the graphs that makes the system safe to expose.</p>
+
+<table>
+  <tr><th>Concern</th><th>Mechanism</th><th>Where</th></tr>
+  <tr><td>Auth</td><td>API key, constant-time compare; mandatory if <code>ENVIRONMENT=production</code></td><td><code>api/security.py</code></td></tr>
+  <tr><td>Per-client rate limit</td><td>Sliding window; Redis when <code>RATE_LIMIT_BACKEND=auto|redis</code></td><td><code>api/rate_limit.py</code></td></tr>
+  <tr><td>Process cost budget</td><td>QPM + tokens/min + tokens/hour</td><td><code>guardrails.py</code></td></tr>
+  <tr><td>Privacy</td><td>PII/PHI detect; redact/block output</td><td><code>privacy.py</code></td></tr>
+  <tr><td>Answer cache</td><td>Redis key <code>rag:v1:{mode}:{hash}</code>; skip when memory changes answer; flush on re-ingest</td><td><code>cache/redis_cache.py</code></td></tr>
+  <tr><td>Idempotency</td><td><code>Idempotency-Key</code> on sync <code>/query</code></td><td>server + Redis</td></tr>
+  <tr><td>Circuit breakers</td><td>Fail-fast for <code>nvidia_rerank</code> and <code>web_search</code></td><td><code>resilience/circuit_breaker.py</code></td></tr>
+  <tr><td>Node output gates</td><td>Quarantine bad tool/node outputs; abort critical path (<code>error_code=node_gate_abort</code>)</td><td><code>resilience/node_gate.py</code></td></tr>
+  <tr><td>Metrics</td><td>Prometheus counters/histograms at <code>GET /metrics</code></td><td><code>api/metrics.py</code></td></tr>
+  <tr><td>Tracing</td><td>Optional LangSmith via <code>bootstrap.py</code></td><td><code>observability.py</code></td></tr>
+  <tr><td>Memory</td><td>Compact packing; optional Supabase persistence</td><td><code>memory/*</code></td></tr>
+</table>
+
+<div class="card warn">
+  <div class="label">Multi-worker rule</div>
+  Before raising <code>API_WORKERS</code> above 1, run Redis and set
+  <code>RATE_LIMIT_BACKEND=redis</code> (compose already does). In-memory limits are
+  per-process and under-count under load balancing.
+</div>
+
+<h3>9.1 Evaluation</h3>
+<ul>
+  <li><strong>Golden retrieval:</strong> <code>data/eval/golden_qa.json</code> + <code>python -m src.evaluation.retrieval_metrics</code> (use <code>--offline</code> in CI).</li>
+  <li><strong>LLM-as-judge:</strong> <code>python -m src.evaluation.evaluate_all_modes</code> → faithfulness / relevance / context precision.</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>10. API surface &amp; deploy topology</h2>
+
+<h3>10.1 HTTP API</h3>
+<table>
+  <tr><th>Method</th><th>Path</th><th>Auth</th><th>Purpose</th></tr>
+  <tr><td>GET</td><td><code>/health</code></td><td>no</td><td>Liveness</td></tr>
+  <tr><td>GET</td><td><code>/health/ready</code></td><td>no</td><td>Readiness (Chroma, keys, Redis, …)</td></tr>
+  <tr><td>GET</td><td><code>/metrics</code></td><td>no</td><td>Prometheus scrape</td></tr>
+  <tr><td>GET</td><td><code>/modes</code></td><td>yes*</td><td>Mode labels</td></tr>
+  <tr><td>POST</td><td><code>/query</code></td><td>yes*</td><td>Sync JSON answer</td></tr>
+  <tr><td>POST</td><td><code>/query/stream</code></td><td>yes*</td><td>SSE progressive answer</td></tr>
+</table>
+<p class="tiny">* Auth enforced when <code>REQUIRE_API_KEY=true</code> or <code>ENVIRONMENT=production</code>.</p>
+
+<pre>POST /query
+{
+  "question": "What is Self-RAG?",
+  "mode": "agentic",          // default
+  "session_id": "optional-id",
+  "use_memory": true,
+  "chat_history": [{"role":"user","content":"..."}, {"role":"assistant","content":"..."}]
+}</pre>
+
+<h3>10.2 Docker Compose services</h3>
+<table>
+  <tr><th>Service</th><th>Port</th><th>Role</th></tr>
+  <tr><td><code>redis</code></td><td>6379</td><td>Cache, shared rate limits, idempotency</td></tr>
+  <tr><td><code>chroma</code></td><td>8001→8000</td><td>Vector store (HTTP)</td></tr>
+  <tr><td><code>agentic-rag</code></td><td>8000</td><td>FastAPI app</td></tr>
+  <tr><td><code>frontend</code></td><td>8080</td><td>nginx + React; proxies <code>/api</code>; can inject API key</td></tr>
+  <tr><td><code>prometheus</code></td><td>9090</td><td>Optional metrics store</td></tr>
+  <tr><td><code>grafana</code></td><td>3000</td><td>Optional “Agentic RAG Overview” dashboard</td></tr>
+</table>
+
+<pre># Core stack
+cp .env.production.example .env.production   # fill secrets
+docker compose up -d
+
+# Optional observability
+docker compose up prometheus grafana -d</pre>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>11. Configuration map</h2>
+
+<p>All settings load via pydantic-settings in <code>src/config.py</code> from environment / <code>.env</code>.</p>
+
+<table>
+  <tr><th>Group</th><th>Key variables</th></tr>
+  <tr><td>LLM</td><td><code>OPENAI_API_KEY</code>, <code>OPENAI_MODEL</code>, <code>OPENAI_EMBEDDING_MODEL</code>, timeouts/retries/<code>MAX_OUTPUT_TOKENS</code></td></tr>
+  <tr><td>Fallback</td><td><code>LLM_FALLBACK_ENABLED</code>, <code>GROQ_API_KEY</code>, <code>GROQ_MODEL</code></td></tr>
+  <tr><td>Vector store</td><td><code>CHROMA_MODE</code> (persistent|http), host/port, <code>COLLECTION_NAME</code></td></tr>
+  <tr><td>Chunking</td><td><code>CHUNKING_STRATEGY</code>, child/parent sizes, <code>EXPAND_TO_PARENT</code>, <code>PARENT_STORE_PATH</code></td></tr>
+  <tr><td>Cleanse</td><td><code>CLEANSE_ENABLED</code> and <code>CLEANSE_*</code> toggles</td></tr>
+  <tr><td>Retrieval</td><td><code>RETRIEVAL_TOP_K</code>, <code>RETRIEVAL_CANDIDATE_K</code>, <code>RETRIEVAL_SEARCH_TYPE</code>, RRF/MMR knobs</td></tr>
+  <tr><td>Rerank</td><td><code>RERANK_ENABLED</code>, <code>RERANK_PROVIDER</code>, <code>RERANK_MODEL</code>, <code>NVIDIA_API_KEY</code></td></tr>
+  <tr><td>Agent</td><td><code>MAX_RETRIEVAL_RETRIES</code>, <code>GRADER_RELEVANCE_THRESHOLD</code>, <code>MAX_MULTI_HOP_STEPS</code></td></tr>
+  <tr><td>API / security</td><td><code>ENVIRONMENT</code>, <code>API_KEY</code>, <code>REQUIRE_API_KEY</code>, <code>CORS_ORIGINS</code>, <code>TRUSTED_HOSTS</code></td></tr>
+  <tr><td>Rate / cost</td><td><code>MAX_QUERIES_PER_MINUTE*</code>, <code>MAX_TOKENS_*</code>, <code>RATE_LIMIT_BACKEND</code></td></tr>
+  <tr><td>Cache / Redis</td><td><code>CACHE_ENABLED</code>, <code>REDIS_URL</code>, <code>CACHE_TTL_SECONDS</code></td></tr>
+  <tr><td>Resilience</td><td><code>CIRCUIT_BREAKER_*</code>, <code>REQUEST_TIMEOUT_SECONDS</code></td></tr>
+  <tr><td>Memory</td><td><code>MEMORY_*</code>, <code>SUPABASE_URL</code>, <code>SUPABASE_KEY</code></td></tr>
+  <tr><td>Observability</td><td><code>LANGSMITH_*</code></td></tr>
+</table>
+
+<!-- ============================================================ -->
+<h2>12. File ownership quick reference</h2>
+
+<table>
+  <tr><th>Path</th><th>Owns</th></tr>
+  <tr><td><code>src/runner.py</code></td><td>Mode dispatch, lifecycle, cache/memory/follow-ups/streaming orchestration</td></tr>
+  <tr><td><code>src/graph/*_graph.py</code></td><td>Per-mode LangGraph topologies + <code>ask_*</code> entrypoints</td></tr>
+  <tr><td><code>src/rag/baseline.py</code></td><td>Phase 1 fixed pipeline</td></tr>
+  <tr><td><code>src/agents/*</code></td><td>Structured LLM decision chains</td></tr>
+  <tr><td><code>src/retrieval/*</code></td><td>Hybrid search, rerank, citations</td></tr>
+  <tr><td><code>src/ingestion/*</code></td><td>Cleanse, chunk, parent store, Chroma upsert</td></tr>
+  <tr><td><code>src/tools/all_tools.py</code></td><td><code>retrieve_docs</code>, <code>web_search</code>, <code>calculator</code></td></tr>
+  <tr><td><code>src/llm.py</code></td><td>OpenAI primary + optional Groq fallback</td></tr>
+  <tr><td><code>src/streaming.py</code></td><td>SSE emitter, tokens, graph step streaming</td></tr>
+  <tr><td><code>src/cache/redis_cache.py</code></td><td>Answer cache + idempotency helpers</td></tr>
+  <tr><td><code>src/resilience/circuit_breaker.py</code></td><td>Named breakers</td></tr>
+  <tr><td><code>src/api/server.py</code></td><td>HTTP routes and response models</td></tr>
+  <tr><td><code>src/api/metrics.py</code></td><td>Prometheus instrumentation</td></tr>
+  <tr><td><code>frontend/</code></td><td>React chat UI (SSE, citations, follow-ups, traces)</td></tr>
+  <tr><td><code>monitoring/</code></td><td>Prometheus scrape config + Grafana dashboard</td></tr>
+  <tr><td><code>data/eval/golden_qa.json</code></td><td>Retrieval golden set</td></tr>
+</table>
+
+<!-- ============================================================ -->
+<div class="page-break"></div>
+<h2>13. Worked traces</h2>
+
+<p>Re-run these with <code>-v</code> to see <code>steps</code> fill in live.</p>
+
+<h3>13.1 Simple fact — <code>baseline</code> vs <code>crag</code></h3>
+<pre>python -m src.cli ask "What is Self-RAG?" --mode baseline -v
+python -m src.cli ask "What is Self-RAG?" --mode crag -v</pre>
+<div class="card ok">
+  <div class="label">What to notice</div>
+  Baseline: one retrieve → generate. CRAG: retrieve → grade each chunk → maybe rewrite
+  → generate (or web fallback if the corpus is weak).
+</div>
+
+<h3>13.2 Comparison — <code>decompose</code></h3>
+<pre>python -m src.cli ask "Compare naive RAG, advanced RAG, and modular RAG" --mode decompose -v</pre>
+<div class="card ok">
+  <div class="label">What to notice</div>
+  <code>sub_queries</code> appear; parallel <code>retrieve_sub</code> workers; one synthesis.
+</div>
+
+<h3>13.3 Sequential dependence — <code>multi_hop</code></h3>
+<pre>python -m src.cli ask "What fallback does CRAG use when retrieval fails?" --mode multi_hop -v</pre>
+<div class="card ok">
+  <div class="label">What to notice</div>
+  Hop 1 finds CRAG; reflect builds hop 2 query about fallback; synthesize.
+</div>
+
+<h3>13.4 Full orchestrator — <code>agentic</code></h3>
+<pre>python -m src.cli ask "Compare RAG vs Agentic RAG; what is Self-RAG grading?" --mode agentic -v</pre>
+<div class="card ok">
+  <div class="label">What to notice</div>
+  Steps show <code>Router → retrieve</code>, then <code>Strategy: decompose|…</code>,
+  then grade, then generate. Same question through baseline will be shallower.
+</div>
+
+<h3>13.5 HTTP smoke</h3>
+<pre>uvicorn src.api.server:app --reload --port 8000
+
+curl -s http://localhost:8000/health
+curl -s -X POST http://localhost:8000/query \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is Self-RAG?","mode":"agentic"}' | jq '.answer,.steps,.follow_ups'
+
+curl -N http://localhost:8000/query/stream \
+  -H "Content-Type: application/json" \
+  -d '{"question":"What is Self-RAG?","mode":"agentic"}'</pre>
+
+<!-- ============================================================ -->
+<div class="footer-note">
+  <strong>Agentic RAG — System Reference Manual</strong> · August 2026<br/>
+  Canonical code entry points: <code>src/runner.py</code>, <code>src/graph/</code>,
+  <code>src/api/server.py</code>. Companion docs: <code>README.md</code>,
+  <code>docs/ROADMAP.md</code>, <code>docs/PRODUCTION.md</code>,
+  <code>docs/GUARDRAILS.md</code>, <code>docs/LANGCHAIN_STACK.md</code>.<br/>
+  If code and this manual diverge, trust the code — then update this file.
+</div>
+
+</body>
+</html>

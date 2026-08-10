@@ -2,6 +2,7 @@
 
 import pytest
 
+from src.resilience.node_gate import PREFIX_TOOL_ERROR
 from src.tools.all_tools import calculator, safe_calculate
 
 
@@ -24,7 +25,9 @@ def test_calculator_rejects_code_execution():
     ]
     for expr in dangerous:
         result = calculator.invoke({"expression": expr})
-        assert result.startswith("Error"), f"Expression was not rejected: {expr}"
+        assert result.startswith(PREFIX_TOOL_ERROR), (
+            f"Expression was not rejected: {expr}"
+        )
 
 
 def test_safe_calculate_rejects_huge_exponents():
@@ -39,4 +42,5 @@ def test_safe_calculate_rejects_long_expressions():
 
 def test_calculator_handles_division_by_zero():
     result = calculator.invoke({"expression": "1 / 0"})
-    assert result.startswith("Error")
+    assert result.startswith(PREFIX_TOOL_ERROR)
+    assert "division by zero" in result

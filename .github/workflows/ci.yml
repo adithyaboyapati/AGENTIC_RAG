@@ -2,9 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, dev, prod]
   pull_request:
-    branches: [main, master]
+    branches: [main, master, dev, prod]
+
+# A new push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   lint:
@@ -15,9 +23,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+          cache: pip
 
+      # Pinned in requirements-dev.txt: an unpinned linter turns CI red on
+      # someone else's release day.
       - name: Install ruff
-        run: pip install ruff
+        run: pip install "$(grep -E '^ruff==' requirements-dev.txt)"
 
       - name: Lint
         run: ruff check src/ tests/ streamlit_app.py
@@ -33,19 +44,88 @@ jobs:
           cache: pip
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: pip install -r requirements-dev.txt
 
+      # --cov-fail-under is a ratchet floor, not a target: it is set just below
+      # the current number so coverage can only go up. Raise it whenever the
+      # measured value clears the next step.
       - name: Run tests
         env:
           ENVIRONMENT: development
           REQUIRE_API_KEY: "false"
           OPENAI_API_KEY: test-key
-        run: pytest tests/ -q
+          RATE_LIMIT_BACKEND: memory
+        run: >
+          pytest tests/ -q
+          --cov=src --cov-report=term-missing --cov-report=xml
+          --cov-fail-under=55
+          --timeout=300
 
       - name: Import smoke test
         env:
           OPENAI_API_KEY: test-key
         run: python -c "from src.api.server import app; from src.runner import run_agent"
+
+      - name: Offline golden-set gate
+        env:
+          OPENAI_API_KEY: test-key
+        run: python -m src.evaluation.retrieval_metrics --offline
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # gitleaks needs history to scan past commits
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+
+      - name: Install pip-audit
+        run: pip install "$(grep -E '^pip-audit==' requirements-dev.txt)"
+
+      - name: Audit Python dependencies for known CVEs
+        run: pip-audit -r requirements.txt --strict
+
+      - name: Scan git history for secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high --omit=dev
+
+      - name: Build
+        run: npm run build
 
   docker:
     runs-on: ubuntu-latest
@@ -62,3 +142,29 @@ jobs:
             exit 1
           fi
           echo "OK: no .env files in image"
+
+      - name: Verify the image runs as a non-root user
+        run: |
+          uid="$(docker run --rm --entrypoint id agentic-rag:ci -u)"
+          if [ "$uid" = "0" ]; then
+            echo "ERROR: container runs as root"
+            exit 1
+          fi
+          echo "OK: running as uid $uid"
+
+      - name: Verify the compiler toolchain is not in the runtime image
+        run: |
+          if docker run --rm --entrypoint sh agentic-rag:ci -c "command -v gcc"; then
+            echo "ERROR: gcc present in runtime image"
+            exit 1
+          fi
+          echo "OK: no compiler in runtime image"
+
+      - name: Scan image for OS/library vulnerabilities
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: agentic-rag:ci
+          format: table
+          exit-code: "1"
+          ignore-unfixed: true
+          severity: CRITICAL,HIGH

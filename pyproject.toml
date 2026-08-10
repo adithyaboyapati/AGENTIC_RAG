@@ -1,0 +1,33 @@
+[tool.ruff]
+# Pinned rule set so lint is reproducible. Without an explicit config, `ruff
+# check` follows whatever defaults the installed ruff ships, and a new release
+# turns a green CI red without a single line of code changing.
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = [
+    "E4",  # imports
+    "E7",  # statements
+    "E9",  # runtime errors
+    "F",   # pyflakes
+    "B",   # bugbear
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line length — formatter's job, not the linter's
+    "B008",  # function call in default arg: this is how FastAPI Depends/Security work
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests intentionally poke at private helpers and reuse fixtures.
+"tests/*" = ["B011"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+asyncio_mode = "auto"
+addopts = "-q --strict-markers"
+filterwarnings = [
+    "ignore::DeprecationWarning:pkg_resources.*",
+]

@@ -1,21 +1,24 @@
 # Learning Roadmap — Phase by Phase
 
-**Status:** Phases 0–7 complete. Phase 8 evaluation in progress.
+**Status:** Phases 0–9 complete (including Phase 8.5 hardening and Phase 9 production
+features: frontend, streaming, cache, metrics, circuit breakers, golden eval).
 
 Each phase has **learning goals**, **what to build**, and **how to verify you understood it**.
 
 ## Quick Navigation
 
-| Phase | Status | CLI | Streamlit |
-|-------|--------|-----|-----------|
-| 1 Baseline | ✅ Done | `--mode baseline` | Dropdown |
-| 2 Router | ✅ Done | `--mode router` | Dropdown |
-| 3 CRAG | ✅ Done | `--mode crag` | Dropdown |
-| 4 Decompose | ✅ Done | `--mode decompose` | Dropdown |
-| 5 Multi-hop | ✅ Done | `--mode multi_hop` | Dropdown |
-| 6 Tools | ⏳ Pending | — | — |
-| 7 Full Agent | ⏳ Pending | — | — |
-| 8 Production | ⏳ Pending | — | — |
+| Phase | Status | CLI | UI |
+|-------|--------|-----|-----|
+| 1 Baseline | ✅ Done | `--mode baseline` | React / Streamlit |
+| 2 Router | ✅ Done | `--mode router` | React / Streamlit |
+| 3 CRAG | ✅ Done | `--mode crag` | React / Streamlit |
+| 4 Decompose | ✅ Done | `--mode decompose` | React / Streamlit |
+| 5 Multi-hop | ✅ Done | `--mode multi_hop` | React / Streamlit |
+| 6 Tools | ✅ Done | `--mode tools` | React / Streamlit |
+| 7 Full Agent | ✅ Done | `--mode agentic` | React / Streamlit |
+| 8 Production | ✅ Done | REST API + eval suite | N/A |
+| 8.5 Hardening | ✅ Done | N/A (cross-cutting) | N/A |
+| 9 Prod features | ✅ Done | Cache, metrics, SSE, golden eval | React (primary) |
 
 ---
 
@@ -303,25 +306,95 @@ cat ragas_eval_results.json | jq '.[] | select(.mode=="crag")'
 
 ## Implementation Status
 
-| Phase | Status | Files | Est. Time |
-|-------|--------|-------|-----------|
-| 0 Foundation | ✅ Done | config, ingestion, retrieval | 1 day |
-| 1 Baseline RAG | ✅ Done | baseline.py | 1 day |
-| 2 Router | ✅ Done | router.py, router_graph.py | 1 day |
-| 3 CRAG | ✅ Done | grader.py, crag_graph.py | 1 day |
-| 4 Decompose | ✅ Done | decomposer.py, decompose_graph.py | 1 day |
-| 5 Multi-hop | ✅ Done | multi_hop.py, multi_hop_graph.py | 1 day |
-| 6 Tools | ⏳ Pending | tools expansion | 1-2 days |
-| 7 Full Agent | ⏳ Pending | unified agent_graph.py | 1-2 days |
-| 8 Production | ⏳ Pending | api, evaluation, deployment | 2-3 days |
-| **Total** | **6/8** | **1 week done, 2 weeks to go** | 10 days |
+| Phase | Status | Files |
+|-------|--------|-------|
+| 0 Foundation | ✅ Done | config, ingestion, retrieval |
+| 1 Baseline RAG | ✅ Done | `rag/baseline.py` |
+| 2 Router | ✅ Done | `agents/router.py`, `graph/router_graph.py` |
+| 3 CRAG | ✅ Done | `agents/grader.py`, `graph/crag_graph.py` |
+| 4 Decompose | ✅ Done | `agents/decomposer.py`, `graph/decompose_graph.py` |
+| 5 Multi-hop | ✅ Done | `agents/multi_hop.py`, `graph/multi_hop_graph.py` |
+| 6 Tools | ✅ Done | `tools/all_tools.py`, `graph/tools_graph.py` |
+| 7 Full Agent | ✅ Done | `agents/orchestrator.py`, `graph/agent_graph.py` |
+| 8 Production | ✅ Done | `api/`, `evaluation/`, `Dockerfile`, CI |
+| 8.5 Hardening | ✅ Done | `guardrails.py`, `privacy.py`, `api/security.py`, `api/rate_limit.py` |
+| 9 Prod features | ✅ Done | `frontend/`, `cache/`, `resilience/`, `streaming.py`, `monitoring/`, golden eval |
+| **Total** | **10/10** | — |
 
-## How to Continue
+## Phase 8.5: Production Hardening ✅ COMPLETE
 
-After Phase 5, pick Phase 6 or 7:
-- **Phase 6** teaches tool-calling and expanding beyond RAG
-- **Phase 7** combines all patterns into one unified agent
-- **Phase 8** is production-ready deployment
+A senior-architect review surfaced gaps between "runs correctly" and "safe to expose to
+real traffic." What changed, beyond Phase 8's initial API/eval work:
+
+- **Removed `eval()`** from the calculator tool (`src/tools/all_tools.py`) — prompt
+  injection could otherwise execute arbitrary Python. Replaced with an AST-restricted
+  arithmetic evaluator.
+- **Mandatory auth in production** — the server now refuses to start if
+  `ENVIRONMENT=production` and no `API_KEY` is configured, instead of logging an error and
+  continuing to serve (`src/api/server.py`).
+- **Per-client rate limiting** (`src/api/rate_limit.py`) on top of the existing
+  process-wide budget — one abusive client can no longer exhaust capacity for everyone.
+- **Real token/cost tracking**, wired into every request via LangChain's OpenAI callback,
+  checked against a budget *before* dispatch (`src/guardrails.py`, `src/runner.py`).
+- **Hard LLM-level timeouts/retries/`max_tokens`** (`src/llm.py`) so a client-side timeout
+  doesn't leave an abandoned call still billing OpenAI.
+- **Guardrail false-positive fixes** — replaced the input keyword blocklist (which
+  rejected "what is a token limit?") with credential-pattern detection; fixed the SSN
+  regex to require dashes; PHI no longer blocks informational medical questions by
+  default (see [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md)).
+- **Non-root, secret-free Docker image** — `.dockerignore` added, CI verifies no `.env`
+  ends up inside the built image.
+- **Removed the global retrieval lock** that serialized every vector search process-wide,
+  which defeated the parallel retrieval the decompose graph is designed for.
+- **Pinned dependencies**, added `ruff` lint + Docker build to CI, moved secrets off
+  async event-loop-blocking calls in the API layer.
+
+See [GUARDRAILS.md](GUARDRAILS.md), [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md), and
+[PRODUCTION.md](PRODUCTION.md) for the details of each.
+
+## Phase 9: Production Features ✅ COMPLETE
+
+After Phase 8, production feedback led to new capabilities:
+
+### Advanced Ingestion & Retrieval
+- **Section-aware parent-child chunking** (`src/ingestion/chunking.py`) — PDFs with TOC/headings are split into semantic parents + child chunks, enabling precise retrieval with context expansion
+- **PDF cleansing** (`src/ingestion/cleanse.py`) — headers, footers, page numbers, boilerplate, and irrelevant sections (References, Appendices) are removed before indexing
+- **Hybrid retrieval** — dense + BM25 fusion with RRF, or MMR, instead of only vector similarity
+- **Cross-encoder reranking** (`src/retrieval/reranker.py`) — after over-fetching candidates, rescore with NVIDIA NeMo Retriever (`llama-nemotron-rerank-vl-1b-v2`) or local FlashRank before `top_k` truncation
+- **Parent store** — cached parent section expansions for efficient context synthesis
+- **Chroma HTTP mode** — `CHROMA_MODE=http` for docker-compose / multi-worker (local SQLite remains the default for single-process dev)
+
+### Citation & Grounding
+- **Citation dataclass** (`src/schemas.py::Citation`) — chunk ID, source, page, section, snippet, relevance score
+- **Citation extraction** (`src/retrieval/citations.py`) — `build_response()` assembles `AgentResponse` with validated citations and context docs
+- **Golden retrieval eval** (`src/evaluation/retrieval_metrics.py` + `data/eval/golden_qa.json`) — hit-rate, recall@k, MRR; `--offline` gate in CI
+
+### Follow-Up Questions
+- **Follow-up generation** (`src/agents/followups.py`) — generates 3 grounded follow-up questions post-answer, using fresh retrieval or answer snippets
+- **Frontend chips** — React UI renders clickable follow-up suggestions so users can explore related topics
+
+### Streaming & Frontend
+- **True SSE streaming** (`src/streaming.py`, `POST /query/stream`) — agent steps as LangGraph nodes finish, answer tokens as they generate
+- **Chat UI** (`frontend/`) — React + Vite with markdown, mode selector, citations, traces, memory controls
+- **Compose frontend** — nginx image proxies `/api` to the API and injects `API_KEY` server-side
+
+### Resilience & Cost
+- **Redis answer cache** (`src/cache/redis_cache.py`) — identical `question`+`mode` hits for `CACHE_TTL_SECONDS`; skipped when memory would change the answer; flushed on re-ingest
+- **Redis-backed rate limits** (`RATE_LIMIT_BACKEND=auto|redis|memory`) — shared across API workers
+- **Idempotency** — optional `Idempotency-Key` on `POST /query` (Redis-backed)
+- **Circuit breakers** (`src/resilience/circuit_breaker.py`) — NVIDIA rerank and web search fail fast after consecutive errors
+- **Groq LLM fallback** (`src/llm.py`) — when `GROQ_API_KEY` is set, OpenAI failures (quota/rate limit) retry on Groq; embeddings stay on OpenAI
+- **Optional online quality checks** — when `QUALITY_GUARDRAILS_ENABLED=true`, every query is scored for faithfulness, relevance, context precision
+- **Fine-grained memory** — compact prompt packing with recent Q+A kept full, older turns kept as questions only
+
+### Observability
+- **Prometheus metrics** (`src/api/metrics.py`, `GET /metrics`) — request counts/latency, cache events, LLM fallbacks, rate-limit hits
+- **Grafana dashboard** (`monitoring/grafana/`) — pre-provisioned **Agentic RAG Overview**
+- **Request IDs** — `X-Request-ID` accepted/propagated on every response
+
+All of these are **optional or env-gated** — local CLI/dev still works with OpenAI + a local Chroma
+dir. For production, Redis + Chroma HTTP + frontend + Prometheus/Grafana (see
+[PRODUCTION.md](PRODUCTION.md)) are recommended.
 
 ---
 

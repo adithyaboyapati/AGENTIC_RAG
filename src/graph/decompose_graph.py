@@ -19,8 +19,10 @@ from langgraph.types import Send
 from src.agents.decomposer import decompose_chain
 from src.agents.router import RouteType, router_chain
 from src.chains.generation import direct_chain, synthesis_chain, web_search_chain
+from src.retrieval.citations import build_response, docs_to_sources
 from src.retrieval.retriever import format_docs, retrieve
 from src.schemas import AgentResponse
+from src.streaming import run_graph_streaming, stream_text
 from src.tools.web_search import web_search
 
 
@@ -33,6 +35,7 @@ class DecomposeState(TypedDict):
     question: str
     route: str
     route_reason: str
+    skip_router: bool
     sub_queries: list[str]
     decomposition_reason: str
     sub_results: Annotated[list[SubQueryResult], operator.add]
@@ -49,6 +52,10 @@ class RetrieveSubState(TypedDict):
 
 
 def classify_node(state: DecomposeState) -> dict:
+    if state.get("skip_router") and state.get("route"):
+        return {
+            "steps": [f"Router skipped (parent set route={state['route']})"],
+        }
     decision = router_chain.invoke({"question": state["question"]})
     return {
         "route": decision.route.value,
@@ -58,7 +65,7 @@ def classify_node(state: DecomposeState) -> dict:
 
 
 def direct_answer_node(state: DecomposeState) -> dict:
-    answer = direct_chain.invoke({"question": state["question"]})
+    answer = stream_text(direct_chain, {"question": state["question"]})
     return {"answer": answer, "sources": [], "steps": ["Direct answer (no retrieval)"]}
 
 
@@ -95,28 +102,32 @@ def retrieve_sub_node(state: RetrieveSubState) -> dict:
 def synthesize_node(state: DecomposeState) -> dict:
     """Reduce step: combine all sub-query contexts and synthesize one answer."""
     context_parts = []
-    all_sources: set[str] = set()
+    all_docs: list[Document] = []
 
     for i, result in enumerate(state["sub_results"], 1):
         sq = result["sub_query"]
         docs = result["documents"]
-        for doc in docs:
-            all_sources.add(doc.metadata.get("source", "unknown"))
+        all_docs.extend(docs)
         context_parts.append(f"## Sub-query {i}: {sq}\n{format_docs(docs)}")
 
     combined_context = "\n\n".join(context_parts)
-    answer = synthesis_chain.invoke({"question": state["question"], "context": combined_context})
+    answer = stream_text(
+        synthesis_chain,
+        {"question": state["question"], "context": combined_context},
+    )
 
     return {
         "answer": answer,
-        "sources": list(all_sources),
+        "sources": docs_to_sources(all_docs),
         "steps": [f"Synthesized answer from {len(state['sub_results'])} sub-query retrievals"],
     }
 
 
 def web_search_node(state: DecomposeState) -> dict:
     context = web_search.invoke(state["question"])
-    answer = web_search_chain.invoke({"context": context, "question": state["question"]})
+    answer = stream_text(
+        web_search_chain, {"context": context, "question": state["question"]}
+    )
     return {
         "answer": answer,
         "sources": ["web search"],
@@ -174,22 +185,26 @@ def get_decompose_graph():
 def ask_decompose(question: str) -> AgentResponse:
     """Run the Phase 4 query decomposition agent."""
     graph = get_decompose_graph()
-    result = graph.invoke(
+    result = run_graph_streaming(
+        graph,
         {
             "question": question,
             "route": "",
             "route_reason": "",
+            "skip_router": False,
             "sub_queries": [],
             "decomposition_reason": "",
             "sub_results": [],
             "answer": "",
             "sources": [],
             "steps": [],
-        }
+        },
     )
-    return AgentResponse(
+    docs = [doc for sub in result.get("sub_results", []) for doc in sub["documents"]]
+    return build_response(
         answer=result["answer"],
         mode="decompose",
+        docs=docs,
         sources=result.get("sources", []),
         route=result.get("route"),
         route_reason=result.get("route_reason"),

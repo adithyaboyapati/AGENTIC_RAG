@@ -12,19 +12,52 @@ Then wraps with CRAG grading for safety.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from enum import Enum
+
+from pydantic import BaseModel, Field, field_validator
 
 from src.llm import get_llm
 from src.prompts import ChatPromptTemplate
+
+VALID_STRATEGIES = frozenset({"decompose", "multi_hop", "tools", "simple"})
+
+
+class StrategyType(str, Enum):
+    DECOMPOSE = "decompose"
+    MULTI_HOP = "multi_hop"
+    TOOLS = "tools"
+    SIMPLE = "simple"
 
 
 class StrategyChoice(BaseModel):
     """Analyze question to pick best retrieval strategy."""
 
     strategy: str = Field(
-        description="Strategy choice: 'decompose' (comparisons), 'multi_hop' (sequential), 'tools' (mixed), or 'simple' (direct retrieval)"
+        description=(
+            "Strategy choice: 'decompose' (comparisons), 'multi_hop' (sequential), "
+            "'tools' (mixed), or 'simple' (direct retrieval)"
+        )
     )
     reasoning: str = Field(description="Why this strategy was chosen")
+
+    @field_validator("strategy")
+    @classmethod
+    def normalize_strategy(cls, value: str) -> str:
+        normalized = (value or "").strip().lower().replace("-", "_").replace(" ", "_")
+        aliases = {
+            "decomposition": "decompose",
+            "multihop": "multi_hop",
+            "multi_hop_retrieval": "multi_hop",
+            "tool": "tools",
+            "tooling": "tools",
+            "baseline": "simple",
+            "retrieve": "simple",
+            "rag": "simple",
+        }
+        normalized = aliases.get(normalized, normalized)
+        if normalized not in VALID_STRATEGIES:
+            return StrategyType.SIMPLE.value
+        return normalized
 
 
 STRATEGY_PROMPT = ChatPromptTemplate.from_messages(
@@ -47,7 +80,8 @@ Strategies:
 4. simple — Use for straightforward factual questions about a single topic.
    → Single retrieval pass, grade, and generate.
 
-Choose ONE strategy based on the question structure.""",
+Choose ONE strategy based on the question structure. Reply with exactly one of:
+decompose, multi_hop, tools, simple.""",
         ),
         ("human", "Analyze this question and pick a strategy:\n\n{question}"),
     ]
@@ -59,3 +93,9 @@ strategy_chain = STRATEGY_PROMPT | get_llm().with_structured_output(StrategyChoi
 def choose_strategy(question: str) -> StrategyChoice:
     """Analyze the question and recommend a retrieval strategy."""
     return strategy_chain.invoke({"question": question})
+
+
+def normalize_strategy(strategy: str | None) -> str:
+    """Clamp an arbitrary strategy string to a valid graph edge label."""
+    choice = StrategyChoice(strategy=strategy or "simple", reasoning="")
+    return choice.strategy

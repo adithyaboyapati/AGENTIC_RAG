@@ -1,8 +1,13 @@
-"""Unified agent runner for CLI and Streamlit."""
+"""Unified agent runner for CLI, API, and Streamlit."""
 
 from __future__ import annotations
 
 import logging
+import queue
+import threading
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import Any
 
 from src.config import settings
 from src.guardrails import (
@@ -82,7 +87,7 @@ def _dispatch(question: str, mode: str) -> AgentResponse:
 
 
 def _apply_post_guardrails(result: AgentResponse) -> AgentResponse:
-    """Run output, privacy, and cost guardrails on every mode."""
+    """Run output and privacy guardrails on every mode."""
     policy = get_privacy_policy()
 
     valid, violations = OutputGuardrails.validate(
@@ -94,19 +99,46 @@ def _apply_post_guardrails(result: AgentResponse) -> AgentResponse:
             if v.severity == "error":
                 logger.warning("Output guardrail: %s", v.message)
 
-    privacy_ok, pii_phi_findings = PrivacyGuard.check_output(result.answer, policy)
-    if not privacy_ok:
-        pii_count = sum(1 for f in pii_phi_findings if f.severity == "pii")
-        phi_count = sum(1 for f in pii_phi_findings if f.severity == "phi")
-        logger.warning("Privacy: output contains %d PII and %d PHI findings", pii_count, phi_count)
+    outcome = PrivacyGuard.apply_output(result.answer, policy)
+    if outcome.findings:
+        pii_count = sum(1 for f in outcome.findings if f.severity != "phi")
+        phi_count = sum(1 for f in outcome.findings if f.severity == "phi")
+        logger.warning(
+            "Privacy: output contains %d PII/financial and %d PHI findings (mode=%s)",
+            pii_count,
+            phi_count,
+            policy.output_mode.value,
+        )
 
-        if settings.block_output_pii:
-            raise ValueError("Response blocked: output contains sensitive personal or health information")
+    if not outcome.allowed:
+        raise ValueError(
+            "Response blocked: output contains sensitive personal or health information"
+        )
 
-        if settings.redact_output_pii:
-            result.answer = PrivacyGuard.process_output(result.answer, policy)
-
+    result.answer = outcome.text
     return result
+
+
+def _maybe_quality_check(question: str, result: AgentResponse) -> None:
+    """Optionally run LLM-as-judge quality guardrails (extra cost; off by default)."""
+    if not settings.quality_guardrails_enabled or not result.context_docs:
+        return
+    try:
+        from src.evaluation.metrics import evaluate_metrics
+        from src.guardrails import QualityGuardrails
+
+        context = "\n---\n".join(result.context_docs)
+        metrics = evaluate_metrics(question, result.answer, context)
+        ok, violations = QualityGuardrails.validate(
+            faithfulness=metrics.faithfulness,
+            relevance=metrics.answer_relevance,
+            context_precision=metrics.context_precision,
+        )
+        if not ok:
+            for v in violations:
+                logger.warning("Quality guardrail: %s", v.message)
+    except Exception:
+        logger.warning("Quality guardrail check failed", exc_info=True)
 
 
 def run_agent(
@@ -116,21 +148,232 @@ def run_agent(
     use_memory: bool = True,
 ) -> AgentResponse:
     """Dispatch a question to the selected agent mode with guardrails and privacy checks."""
-    policy = get_privacy_policy()
+    from src.cache.redis_cache import get_cached_response
 
-    privacy_ok, pii_phi_findings = PrivacyGuard.check_input(question, policy)
-    if not privacy_ok:
-        found_types = sorted({f.data_type.value for f in pii_phi_findings})
-        raise ValueError(
-            f"Input contains sensitive data: {', '.join(found_types)}. Please remove before proceeding."
+    pre = _prepare_agent_run(question, mode, chat_history, use_memory)
+
+    if pre.cacheable:
+        cached = get_cached_response(pre.sanitized_question, mode)
+        if cached is not None:
+            return _apply_post_guardrails(cached)
+
+    _consume_budget(pre.tracker)
+
+    result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
+    result = _apply_post_guardrails(result)
+    result = _finalize_agent_result(
+        pre.sanitized_question, result, cacheable=pre.cacheable
+    )
+    return result
+
+
+def _finalize_agent_result(
+    question: str,
+    result: AgentResponse,
+    *,
+    cacheable: bool,
+) -> AgentResponse:
+    """Post-dispatch: quality/follow-ups/cache, with abort-aware handling."""
+    from src.cache.redis_cache import set_cached_response
+
+    if result.error_code:
+        logger.warning(
+            "node_gate_abort | mode=%s | code=%s | steps=%d",
+            result.mode,
+            result.error_code,
+            len(result.steps or []),
+        )
+        # Do not invent follow-ups or cache poisoned/aborted outcomes
+        result.follow_ups = []
+        return result
+
+    _maybe_quality_check(question, result)
+    result.follow_ups = _attach_follow_ups(question, result)
+
+    if cacheable:
+        set_cached_response(question, result.mode, result)
+
+    return result
+
+
+def _attach_follow_ups(question: str, result: AgentResponse) -> list[str]:
+    """Generate follow-ups from the user question + answer/context; never fail the request."""
+    try:
+        from src.agents.followups import generate_follow_ups
+
+        return generate_follow_ups(
+            question=question,
+            answer=result.answer,
+            sources=result.sources or [],
+        )
+    except Exception:
+        logger.warning("Follow-up attachment failed", exc_info=True)
+        return []
+
+
+def _estimate_tokens(text: str) -> int:
+    """Best-effort token estimate when provider callbacks are unavailable."""
+    if not text:
+        return 0
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
+
+
+def _record_spend(
+    mode: str,
+    provider: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    tracker,
+) -> None:
+    """Charge the budget, log, and export tokens/cost as Prometheus counters."""
+    tracker.record_usage(prompt_tokens, completion_tokens)
+    total = prompt_tokens + completion_tokens
+    cost = tracker.calculate_cost(prompt_tokens, completion_tokens, provider=provider)
+
+    if total:
+        logger.info(
+            "Token usage | mode=%s | provider=%s | prompt=%d | completion=%d | cost=$%.5f",
+            mode,
+            provider,
+            prompt_tokens,
+            completion_tokens,
+            cost,
+        )
+        try:
+            from src.api.metrics import record_token_usage
+
+            record_token_usage(provider, prompt_tokens, completion_tokens, cost)
+        except Exception:
+            logger.debug("Token metric export skipped", exc_info=True)
+
+    if total > settings.max_tokens_per_query:
+        logger.warning(
+            "Query exceeded per-query token limit (%d > %d)",
+            total,
+            settings.max_tokens_per_query,
         )
 
-    valid, violations = InputGuardrails.validate(question)
+
+def _run_with_cost_tracking(question: str, mode: str, tracker) -> AgentResponse:
+    """Dispatch while recording actual token usage against the budget."""
+    from src.llm import get_llm_provider, reset_llm_provider
+
+    reset_llm_provider()
+    try:
+        from langchain_community.callbacks.manager import get_openai_callback
+    except ImportError:
+        result = _dispatch(question, mode)
+        provider = get_llm_provider()
+        _record_spend(
+            mode,
+            provider,
+            _estimate_tokens(question),
+            _estimate_tokens(result.answer),
+            tracker,
+        )
+        return result
+
+    with get_openai_callback() as cb:
+        result = _dispatch(question, mode)
+
+    provider = get_llm_provider()
+    prompt_tokens = cb.prompt_tokens
+    completion_tokens = cb.completion_tokens
+
+    # Groq (or other) fallback is invisible to the OpenAI callback — estimate.
+    if provider == "groq" and not cb.total_tokens:
+        prompt_tokens = _estimate_tokens(question)
+        completion_tokens = _estimate_tokens(result.answer)
+
+    _record_spend(mode, provider, prompt_tokens, completion_tokens, tracker)
+    return result
+
+
+@dataclass
+class _Preflight:
+    """Result of the shared pre-dispatch checks.
+
+    ``sanitized_question`` is the user question after privacy redaction but
+    *before* memory augmentation — it is what the cache is keyed on, so
+    redaction never splits the cache and history never poisons it.
+    ``effective_question`` is what actually reaches the model.
+    """
+
+    sanitized_question: str
+    effective_question: str
+    tracker: Any
+    cacheable: bool
+
+
+def _prepare_agent_run(
+    question: str,
+    mode: str,
+    chat_history: list[dict[str, str]] | None,
+    use_memory: bool,
+) -> _Preflight:
+    """Shared pre-flight for run_agent / stream_agent.
+
+    Order matters: privacy → input contract → cacheability. Budget consumption
+    is deliberately *not* here — callers check the cache first via
+    ``_consume_budget`` so a cache hit costs no quota. Per-client abuse is
+    bounded at the HTTP layer (``enforce_client_rate_limit``), which is the
+    right place for it.
+
+    Raises ValueError on rejection.
+    """
+    from src.cache.redis_cache import should_use_cache
+
+    policy = get_privacy_policy()
+
+    privacy = PrivacyGuard.apply_input(question, policy)
+    if not privacy.allowed:
+        found_types = sorted({f.data_type.value for f in privacy.findings})
+        raise ValueError(
+            f"Input contains sensitive data: {', '.join(found_types)}. "
+            "Please remove before proceeding."
+        )
+    if privacy.findings:
+        logger.info(
+            "Privacy: redacted %d finding(s) from input (mode=%s)",
+            len(privacy.findings),
+            policy.input_mode.value,
+        )
+    sanitized = privacy.text
+
+    valid, violations = InputGuardrails.validate(sanitized)
     if not valid:
         error_msg = "; ".join(v.message for v in violations)
         raise ValueError(f"Input validation failed: {error_msg}")
 
-    tracker = get_cost_tracker()
+    cacheable = should_use_cache(use_memory=use_memory, chat_history=chat_history)
+
+    effective_question = sanitized
+    if use_memory and chat_history:
+        effective_question = augment_question_with_history(sanitized, chat_history)
+        logger.debug(
+            "Memory enabled — augmented question with %d prior messages",
+            len(chat_history),
+        )
+
+    return _Preflight(
+        sanitized_question=sanitized,
+        effective_question=effective_question,
+        tracker=get_cost_tracker(),
+        cacheable=cacheable,
+    )
+
+
+def _consume_budget(tracker: Any) -> None:
+    """Enforce process-wide rate + token budgets, then record the query.
+
+    Called only when work will actually be dispatched (i.e. after a cache miss).
+    """
     rate_ok, rate_violations = tracker.check_query_rate()
     if not rate_ok:
         raise RateLimitError(rate_violations[0].message)
@@ -141,38 +384,120 @@ def run_agent(
 
     tracker.record_query()
 
-    effective_question = question
-    if use_memory and chat_history:
-        effective_question = augment_question_with_history(question, chat_history)
-        logger.debug("Memory enabled — augmented question with %d prior messages", len(chat_history))
 
-    result = _run_with_cost_tracking(effective_question, mode, tracker)
-    return _apply_post_guardrails(result)
+def stream_agent(
+    question: str,
+    mode: str,
+    chat_history: list[dict[str, str]] | None = None,
+    use_memory: bool = True,
+    cancelled: threading.Event | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Yield progressive SSE-ready events: step / token / answer / follow_ups / sources / done / error.
 
+    Runs the agent in a worker thread with a stream emitter so tokens and steps
+    are forwarded as they are produced (not after the full pipeline finishes).
 
-def _run_with_cost_tracking(question: str, mode: str, tracker) -> AgentResponse:
-    """Dispatch while recording actual token usage against the budget."""
+    ``cancelled`` lets the caller (the SSE endpoint) signal client disconnect.
+    Worker threads cannot be killed, so the emitter checks the flag at each
+    event boundary and unwinds the run instead of billing to completion.
+    """
+    from src.cache.redis_cache import get_cached_response
+    from src.streaming import CancelledRun, use_emitter
+
     try:
-        from langchain_community.callbacks.manager import get_openai_callback
-    except ImportError:
-        return _dispatch(question, mode)
+        pre = _prepare_agent_run(question, mode, chat_history, use_memory)
+    except ValueError as exc:
+        yield {"type": "error", "message": str(exc)}
+        return
 
-    with get_openai_callback() as cb:
-        result = _dispatch(question, mode)
+    cacheable = pre.cacheable
+    tracker = pre.tracker
+    effective_question = pre.effective_question
 
-    tracker.record_usage(cb.prompt_tokens, cb.completion_tokens)
-    if cb.total_tokens:
-        logger.info(
-            "Token usage | mode=%s | prompt=%d | completion=%d | cost=$%.5f",
-            mode,
-            cb.prompt_tokens,
-            cb.completion_tokens,
-            tracker.calculate_cost(cb.prompt_tokens, cb.completion_tokens),
-        )
-    if cb.total_tokens > settings.max_tokens_per_query:
-        logger.warning(
-            "Query exceeded per-query token limit (%d > %d)",
-            cb.total_tokens,
-            settings.max_tokens_per_query,
-        )
-    return result
+    if cacheable:
+        cached = get_cached_response(pre.sanitized_question, mode)
+        if cached is not None:
+            result = _apply_post_guardrails(cached)
+            for step in result.steps or []:
+                yield {"type": "step", "content": step}
+            yield {"type": "answer", "content": result.answer}
+            if result.follow_ups:
+                yield {"type": "follow_ups", "content": result.follow_ups}
+            citations = [c.to_dict() for c in (result.citations or [])]
+            if citations or result.sources:
+                yield {
+                    "type": "sources",
+                    "content": result.sources,
+                    "citations": citations,
+                }
+            yield {"type": "done", "latency_ms": 0.0, "cached": True}
+            return
+
+    events: queue.Queue[dict[str, Any] | None] = queue.Queue()
+    stop = cancelled if cancelled is not None else threading.Event()
+
+    def emit(event: dict[str, Any]) -> None:
+        # Event boundaries are the cancellation checkpoints: raising here
+        # unwinds the graph out of the worker instead of running to completion
+        # for a client that has already gone away.
+        if stop.is_set():
+            raise CancelledRun()
+        events.put(event)
+
+    def worker() -> None:
+        try:
+            _consume_budget(tracker)
+            with use_emitter(emit):
+                result = _run_with_cost_tracking(effective_question, mode, tracker)
+            result = _apply_post_guardrails(result)
+            result = _finalize_agent_result(
+                pre.sanitized_question, result, cacheable=cacheable
+            )
+
+            # Steps/tokens were already emitted during the run; send final payload
+            emit({"type": "answer", "content": result.answer})
+            if result.follow_ups:
+                emit({"type": "follow_ups", "content": result.follow_ups})
+            citations = [c.to_dict() for c in (result.citations or [])]
+            if citations or result.sources:
+                emit(
+                    {
+                        "type": "sources",
+                        "content": result.sources or [],
+                        "citations": citations,
+                    }
+                )
+            done: dict[str, Any] = {
+                "type": "done",
+                "mode": result.mode,
+                "route": result.route,
+                "route_reason": result.route_reason,
+                "steps": result.steps or [],
+            }
+            if result.error_code:
+                done["error_code"] = result.error_code
+            emit(done)
+        except CancelledRun:
+            logger.info("stream_agent cancelled by client | mode=%s", mode)
+        except (RateLimitError, ValueError) as exc:
+            events.put({"type": "error", "message": str(exc)})
+        except Exception:
+            logger.exception("stream_agent failed")
+            events.put({"type": "error", "message": "Internal server error"})
+        finally:
+            events.put(None)
+
+    thread = threading.Thread(target=worker, name=f"stream-agent-{mode}", daemon=True)
+    thread.start()
+
+    try:
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            yield item
+    finally:
+        # Generator closed early (client disconnect / timeout) — tell the worker.
+        stop.set()
+
+    thread.join(timeout=1.0)

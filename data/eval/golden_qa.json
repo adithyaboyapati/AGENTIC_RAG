@@ -1,0 +1,646 @@
+[
+  {
+    "question": "What problem does Retrieval-Augmented Generation (RAG) solve for Large Language Models?",
+    "expected_keywords": [
+      "hallucination",
+      "external knowledge",
+      "knowledge base",
+      "accuracy",
+      "credibility"
+    ],
+    "notes": "Should retrieve the introduction explaining why RAG was proposed to address hallucinations and outdated knowledge."
+  },
+  {
+    "question": "What is Retrieval-Augmented Generation (RAG)?",
+    "expected_keywords": [
+      "retrieval",
+      "generation",
+      "external database",
+      "LLM",
+      "knowledge"
+    ],
+    "notes": "Definition of RAG from the introduction."
+  },
+  {
+    "question": "Why do Large Language Models require external knowledge sources?",
+    "expected_keywords": [
+      "outdated knowledge",
+      "hallucination",
+      "knowledge-intensive tasks",
+      "external database",
+      "current information"
+    ],
+    "notes": "Focus on motivations behind RAG."
+  },
+  {
+    "question": "What are the three major RAG paradigms discussed in the survey?",
+    "expected_keywords": [
+      "Naive RAG",
+      "Advanced RAG",
+      "Modular RAG"
+    ],
+    "notes": "Should retrieve the overview introducing the evolution of RAG."
+  },
+  {
+    "question": "What are the three core components of a RAG framework?",
+    "expected_keywords": [
+      "retrieval",
+      "generation",
+      "augmentation"
+    ],
+    "notes": "Retrieve the section summarizing the three major components."
+  },
+  {
+    "question": "Describe the overall workflow of a typical RAG system.",
+    "expected_keywords": [
+      "indexing",
+      "retrieval",
+      "generation",
+      "chunks",
+      "vector database"
+    ],
+    "notes": "Expected to retrieve Figure 2 description."
+  },
+  {
+    "question": "What happens during the indexing stage of Naive RAG?",
+    "expected_keywords": [
+      "cleaning",
+      "chunking",
+      "embedding",
+      "vector representations",
+      "vector database"
+    ],
+    "notes": "Focus only on indexing."
+  },
+  {
+    "question": "How does the retrieval stage work in Naive RAG?",
+    "expected_keywords": [
+      "query embedding",
+      "similarity",
+      "Top-K",
+      "semantic search",
+      "retrieved chunks"
+    ],
+    "notes": "Should explain semantic similarity search."
+  },
+  {
+    "question": "How does the generation stage work in Naive RAG?",
+    "expected_keywords": [
+      "prompt",
+      "retrieved documents",
+      "LLM",
+      "response",
+      "context"
+    ],
+    "notes": "Retrieve explanation of prompt construction."
+  },
+  {
+    "question": "What are the major limitations of Naive RAG?",
+    "expected_keywords": [
+      "retrieval challenges",
+      "hallucination",
+      "irrelevant chunks",
+      "augmentation hurdles",
+      "redundancy"
+    ],
+    "notes": "Retrieve drawbacks section."
+  },
+  {
+    "question": "Why does Naive RAG suffer from retrieval challenges?",
+    "expected_keywords": [
+      "precision",
+      "recall",
+      "irrelevant chunks",
+      "missing information"
+    ],
+    "notes": "Focus only on retrieval limitations."
+  },
+  {
+    "question": "What are the generation challenges in Naive RAG?",
+    "expected_keywords": [
+      "hallucination",
+      "toxicity",
+      "bias",
+      "unsupported content"
+    ],
+    "notes": "Retrieve only generation issues."
+  },
+  {
+    "question": "What augmentation problems are encountered in Naive RAG?",
+    "expected_keywords": [
+      "redundancy",
+      "disjointed output",
+      "stylistic consistency",
+      "relevance"
+    ],
+    "notes": "Focus on augmentation-related drawbacks."
+  },
+  {
+    "question": "How does Advanced RAG improve over Naive RAG?",
+    "expected_keywords": [
+      "pre-retrieval",
+      "post-retrieval",
+      "retrieval quality",
+      "optimization"
+    ],
+    "notes": "Compare both paradigms."
+  },
+  {
+    "question": "What is the purpose of the pre-retrieval stage in Advanced RAG?",
+    "expected_keywords": [
+      "query optimization",
+      "index optimization",
+      "metadata",
+      "query rewriting",
+      "indexing"
+    ],
+    "notes": "Focus on pre-retrieval improvements."
+  },
+  {
+    "question": "What optimization techniques are applied during the post-retrieval stage in Advanced RAG?",
+    "expected_keywords": [
+      "reranking",
+      "context compression",
+      "post-retrieval",
+      "relevance",
+      "prompt"
+    ],
+    "notes": "Should retrieve the section describing reranking and context compression after retrieval."
+  },
+  {
+    "question": "Why is reranking important in Advanced RAG?",
+    "expected_keywords": [
+      "rerank",
+      "relevance",
+      "prompt edges",
+      "important context",
+      "retrieved documents"
+    ],
+    "notes": "Focus on the motivation behind reranking retrieved chunks."
+  },
+  {
+    "question": "Why does context compression improve RAG performance?",
+    "expected_keywords": [
+      "context compression",
+      "information overload",
+      "essential information",
+      "irrelevant content"
+    ],
+    "notes": "Retrieve explanation about shortening retrieved context."
+  },
+  {
+    "question": "How does Modular RAG differ from Naive and Advanced RAG?",
+    "expected_keywords": [
+      "modular",
+      "adaptability",
+      "flexibility",
+      "components",
+      "modules"
+    ],
+    "notes": "Compare the three RAG paradigms."
+  },
+  {
+    "question": "What new modules are introduced in Modular RAG?",
+    "expected_keywords": [
+      "Search",
+      "Memory",
+      "Routing",
+      "Predict",
+      "Task Adapter"
+    ],
+    "notes": "Retrieve the Modular RAG architecture description."
+  },
+  {
+    "question": "What role does the Search module play in Modular RAG?",
+    "expected_keywords": [
+      "search engines",
+      "knowledge graph",
+      "database",
+      "similarity search",
+      "LLM-generated queries"
+    ],
+    "notes": "Focus only on the Search module."
+  },
+  {
+    "question": "How does the Memory module enhance Modular RAG?",
+    "expected_keywords": [
+      "memory",
+      "retrieval guidance",
+      "unbounded memory",
+      "self-enhancement"
+    ],
+    "notes": "Retrieve the Memory module explanation."
+  },
+  {
+    "question": "What is the purpose of the Routing module in Modular RAG?",
+    "expected_keywords": [
+      "routing",
+      "data sources",
+      "query path",
+      "summarization",
+      "database search"
+    ],
+    "notes": "Focus on query routing between different resources."
+  },
+  {
+    "question": "What is the purpose of the Predict module in Modular RAG?",
+    "expected_keywords": [
+      "Predict",
+      "noise reduction",
+      "redundancy",
+      "LLM-generated context"
+    ],
+    "notes": "Retrieve the Predict module description."
+  },
+  {
+    "question": "How does the Task Adapter module improve Modular RAG?",
+    "expected_keywords": [
+      "Task Adapter",
+      "zero-shot",
+      "few-shot",
+      "task-specific retriever",
+      "prompt retrieval"
+    ],
+    "notes": "Focus on adapting RAG to downstream tasks."
+  },
+  {
+    "question": "What is RAGFusion and how does it improve retrieval?",
+    "expected_keywords": [
+      "RAGFusion",
+      "multi-query",
+      "parallel retrieval",
+      "re-ranking"
+    ],
+    "notes": "Retrieve the description of RAGFusion."
+  },
+  {
+    "question": "How does the Rewrite-Retrieve-Read framework improve retrieval performance?",
+    "expected_keywords": [
+      "Rewrite",
+      "Retrieve",
+      "Read",
+      "query rewriting",
+      "feedback"
+    ],
+    "notes": "Focus on the Rewrite-Retrieve-Read workflow."
+  },
+  {
+    "question": "How does the Generate-Read paradigm differ from traditional retrieval?",
+    "expected_keywords": [
+      "Generate-Read",
+      "LLM-generated content",
+      "retriever replacement"
+    ],
+    "notes": "Retrieve comparison with conventional retrieval."
+  },
+  {
+    "question": "What is the Recite-Read approach in Modular RAG?",
+    "expected_keywords": [
+      "Recite-Read",
+      "model weights",
+      "knowledge-intensive tasks"
+    ],
+    "notes": "Retrieve the description of Recite-Read."
+  },
+  {
+    "question": "What are the benefits of adaptive retrieval methods such as FLARE and Self-RAG?",
+    "expected_keywords": [
+      "adaptive retrieval",
+      "FLARE",
+      "Self-RAG",
+      "retrieval decision",
+      "efficiency"
+    ],
+    "notes": "Should retrieve the adaptive retrieval discussion."
+  },
+  {
+    "question": "How does RAG compare with fine-tuning for improving Large Language Models?",
+    "expected_keywords": [
+      "RAG",
+      "fine-tuning",
+      "external knowledge",
+      "dynamic knowledge",
+      "model adaptation"
+    ],
+    "notes": "Compare RAG and fine-tuning, including their advantages, disadvantages, and use cases."
+  },
+  {
+    "question": "What are the advantages of RAG over fine-tuning?",
+    "expected_keywords": [
+      "real-time updates",
+      "external knowledge",
+      "interpretability",
+      "dynamic environments",
+      "knowledge retrieval"
+    ],
+    "notes": "Focus on why RAG is preferred in dynamic knowledge-intensive applications."
+  },
+  {
+    "question": "When is fine-tuning more suitable than RAG?",
+    "expected_keywords": [
+      "style",
+      "format",
+      "deep customization",
+      "retraining",
+      "model behavior"
+    ],
+    "notes": "Retrieve the discussion describing scenarios favoring fine-tuning."
+  },
+  {
+    "question": "Can RAG and fine-tuning be used together?",
+    "expected_keywords": [
+      "complementary",
+      "combined",
+      "optimization",
+      "iterations",
+      "performance"
+    ],
+    "notes": "Retrieve the section explaining that RAG and fine-tuning are complementary rather than mutually exclusive."
+  },
+  {
+    "question": "What types of retrieval sources can be used in RAG systems?",
+    "expected_keywords": [
+      "unstructured",
+      "semi-structured",
+      "structured",
+      "LLM-generated",
+      "retrieval source"
+    ],
+    "notes": "Retrieve the retrieval source taxonomy."
+  },
+  {
+    "question": "What are the advantages and challenges of using unstructured text as a retrieval source?",
+    "expected_keywords": [
+      "text",
+      "Wikipedia",
+      "corpus",
+      "open-domain",
+      "domain-specific"
+    ],
+    "notes": "Focus on unstructured retrieval sources."
+  },
+  {
+    "question": "Why is retrieving information from semi-structured data such as PDFs challenging?",
+    "expected_keywords": [
+      "PDF",
+      "tables",
+      "text splitting",
+      "semantic similarity",
+      "semi-structured"
+    ],
+    "notes": "Retrieve challenges associated with PDF documents and tables."
+  },
+  {
+    "question": "How can Knowledge Graphs improve Retrieval-Augmented Generation?",
+    "expected_keywords": [
+      "knowledge graph",
+      "structured data",
+      "precise information",
+      "entity",
+      "graph retrieval"
+    ],
+    "notes": "Focus on structured retrieval using Knowledge Graphs."
+  },
+  {
+    "question": "What is G-Retriever and how does it enhance graph retrieval?",
+    "expected_keywords": [
+      "G-Retriever",
+      "Graph Neural Network",
+      "GNN",
+      "soft prompting",
+      "PCST"
+    ],
+    "notes": "Retrieve the description of G-Retriever."
+  },
+  {
+    "question": "How can LLM-generated content be used as a retrieval source?",
+    "expected_keywords": [
+      "LLM-generated",
+      "GenRead",
+      "SelfMem",
+      "internal knowledge",
+      "retrieval enhancement"
+    ],
+    "notes": "Retrieve the section discussing internally generated retrieval content."
+  },
+  {
+    "question": "What is retrieval granularity and why is it important in RAG?",
+    "expected_keywords": [
+      "retrieval granularity",
+      "chunk",
+      "sentence",
+      "document",
+      "precision"
+    ],
+    "notes": "Explain the effect of retrieval granularity on retrieval quality."
+  },
+  {
+    "question": "What are the different retrieval granularities supported in text-based RAG systems?",
+    "expected_keywords": [
+      "token",
+      "phrase",
+      "sentence",
+      "proposition",
+      "chunk",
+      "document"
+    ],
+    "notes": "Retrieve the hierarchy of text retrieval units."
+  },
+  {
+    "question": "What retrieval granularities are commonly used for Knowledge Graph retrieval?",
+    "expected_keywords": [
+      "entity",
+      "triplet",
+      "sub-graph",
+      "knowledge graph"
+    ],
+    "notes": "Focus on retrieval units for graph-based RAG."
+  },
+  {
+    "question": "Why is chunking an important step in RAG indexing?",
+    "expected_keywords": [
+      "chunking",
+      "context",
+      "noise",
+      "embedding",
+      "indexing"
+    ],
+    "notes": "Retrieve the discussion on chunking strategies."
+  },
+  {
+    "question": "What are the trade-offs between large chunks and small chunks in RAG?",
+    "expected_keywords": [
+      "large chunks",
+      "small chunks",
+      "context",
+      "noise",
+      "processing cost"
+    ],
+    "notes": "Compare the advantages and disadvantages of different chunk sizes."
+  },
+  {
+    "question": "What are recursive chunking and sliding window chunking strategies?",
+    "expected_keywords": [
+      "recursive splitting",
+      "sliding window",
+      "overlap",
+      "semantic completeness",
+      "chunking"
+    ],
+    "notes": "Retrieve the indexing optimization section describing recursive splitting and sliding window chunking."
+  },
+  {
+    "question": "How does the Small2Big chunking strategy improve retrieval?",
+    "expected_keywords": [
+      "Small2Big",
+      "sentence",
+      "context",
+      "preceding sentences",
+      "following sentences"
+    ],
+    "notes": "Focus on the Small2Big chunking approach."
+  },
+  {
+    "question": "How can metadata improve document retrieval in RAG?",
+    "expected_keywords": [
+      "metadata",
+      "page number",
+      "author",
+      "timestamp",
+      "retrieval filtering"
+    ],
+    "notes": "Retrieve the metadata attachment discussion."
+  },
+  {
+    "question": "What is Reverse HyDE and how is it used during indexing?",
+    "expected_keywords": [
+      "Reverse HyDE",
+      "hypothetical questions",
+      "LLM",
+      "metadata",
+      "semantic gap"
+    ],
+    "notes": "Focus on metadata generated by LLMs."
+  },
+  {
+    "question": "How does a hierarchical index improve Retrieval-Augmented Generation?",
+    "expected_keywords": [
+      "hierarchical index",
+      "parent-child",
+      "document summaries",
+      "retrieval",
+      "navigation"
+    ],
+    "notes": "Retrieve the hierarchical indexing section."
+  },
+  {
+    "question": "What are the advantages of using Knowledge Graph indexing in RAG?",
+    "expected_keywords": [
+      "Knowledge Graph",
+      "hierarchical structure",
+      "entity relationships",
+      "reasoning",
+      "retrieval accuracy"
+    ],
+    "notes": "Retrieve the Knowledge Graph indexing discussion."
+  },
+  {
+    "question": "Why is query optimization necessary in Retrieval-Augmented Generation?",
+    "expected_keywords": [
+      "query optimization",
+      "ambiguous queries",
+      "retrieval effectiveness",
+      "specialized vocabulary",
+      "query quality"
+    ],
+    "notes": "Retrieve the motivation behind query optimization."
+  },
+  {
+    "question": "What is query expansion in Advanced RAG?",
+    "expected_keywords": [
+      "query expansion",
+      "multiple queries",
+      "additional context",
+      "retrieval",
+      "LLM"
+    ],
+    "notes": "Retrieve the section introducing query expansion."
+  },
+  {
+    "question": "How does Multi-Query retrieval improve retrieval quality?",
+    "expected_keywords": [
+      "Multi-Query",
+      "parallel retrieval",
+      "prompt engineering",
+      "multiple queries",
+      "retrieval"
+    ],
+    "notes": "Focus on Multi-Query retrieval."
+  },
+  {
+    "question": "What is Sub-Query planning in Retrieval-Augmented Generation?",
+    "expected_keywords": [
+      "Sub-Query",
+      "sub-questions",
+      "least-to-most",
+      "complex question",
+      "decomposition"
+    ],
+    "notes": "Retrieve the discussion on breaking complex questions into simpler ones."
+  },
+  {
+    "question": "How does Chain-of-Verification (CoVe) reduce hallucinations?",
+    "expected_keywords": [
+      "Chain-of-Verification",
+      "CoVe",
+      "validation",
+      "hallucination",
+      "LLM"
+    ],
+    "notes": "Retrieve the explanation of CoVe."
+  },
+  {
+    "question": "What is query transformation in RAG?",
+    "expected_keywords": [
+      "query transformation",
+      "rewritten query",
+      "retrieval",
+      "original query"
+    ],
+    "notes": "Retrieve the section introducing query transformation."
+  },
+  {
+    "question": "How does query rewriting improve document retrieval?",
+    "expected_keywords": [
+      "query rewriting",
+      "Rewrite-Retrieve-Read",
+      "RRR",
+      "retrieval effectiveness",
+      "long-tail queries"
+    ],
+    "notes": "Focus on rewriting queries before retrieval."
+  },
+  {
+    "question": "What is HyDE and how does it improve retrieval performance?",
+    "expected_keywords": [
+      "HyDE",
+      "hypothetical document",
+      "embedding similarity",
+      "generated answer",
+      "retrieval"
+    ],
+    "notes": "Retrieve the description of HyDE."
+  },
+  {
+    "question": "How does Step-back Prompting improve retrieval in RAG?",
+    "expected_keywords": [
+      "Step-back Prompting",
+      "high-level question",
+      "abstract query",
+      "retrieval",
+      "original query"
+    ],
+    "notes": "Retrieve the section describing Step-back Prompting."
+  }
+
+]

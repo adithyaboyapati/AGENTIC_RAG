@@ -1,14 +1,19 @@
-# Git
+# Secrets — only *.example templates belong in git
 .env
-.env.production
-.env.local
+.env.*
+!.env.example
+!.env.production.example
+
 __pycache__/
 *.py[cod]
 .venv/
 venv/
+.env.local
 
 # Vector store (regenerate locally)
 data/chroma_db/
+data/parent_store.json
+data/flashrank_cache/
 
 # IDE
 .idea/
@@ -22,6 +27,16 @@ data/chroma_db/
 eval_results/
 ragas_eval_results.json
 
-# Pytest cache
+# Test / lint / coverage artifacts
 .pytest_cache/
+.ruff_cache/
 .deepeval/
+.coverage
+coverage.xml
+htmlcov/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local

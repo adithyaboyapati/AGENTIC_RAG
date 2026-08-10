@@ -1,0 +1,36 @@
+# Catch the cheap failures before CI does.
+#   pip install pre-commit && pre-commit install
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
+      - id: mixed-line-ending
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    # Keep in sync with the ruff pin in requirements-dev.txt.
+    rev: v0.15.15
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.0
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      # .env files carry real secrets; only the *.example templates belong in git.
+      - id: block-env-files
+        name: block committing .env files
+        entry: .env files must never be committed — commit .env.example instead
+        language: fail
+        files: '^\.env($|\.(?!example|production\.example).*)'

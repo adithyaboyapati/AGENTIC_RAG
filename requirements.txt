@@ -48,7 +48,7 @@ supabase==2.31.0
 redis==5.3.1
 
 # Prometheus metrics
-prometheus-client==0.23.1
+prometheus-client==0.26.0
 
 # Dev / test
 pytest==9.1.1

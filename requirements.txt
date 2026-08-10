@@ -28,7 +28,7 @@ uvicorn[standard]==0.48.0
 # Utilities
 python-dotenv==1.2.2
 pydantic==2.13.4
-pydantic-settings==2.14.2
+pydantic-settings==2.15.0
 tiktoken==0.13.0
 rich==14.3.4
 

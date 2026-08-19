@@ -60,7 +60,7 @@ See [docs/CONCEPTS.md](docs/CONCEPTS.md) for the full conceptual deep dive.
 | `multi_hop` | Chains sequential retrievals where each hop builds on the last. |
 | `tools` | Agent picks tools via function calling: retrieve docs, web search, or calculate. |
 | `agentic` | Full orchestrator: analyzes the question, picks a strategy, grades, generates. |
-| `consensus` | Multi-agent adversarial debate: Proposer drafts → Challenger critiques → Consensus Judge arbitrates. |
+| `consensus` | Multi-agent debate over retrieved chunks. Abstains when the sources cannot support the question. |
 
 All modes return **detailed citations** (chunk ID, page, section, relevance score) and
 **follow-up questions** to guide the user's next queries.
@@ -209,7 +209,7 @@ This isn't a demo — the following are enforced automatically:
 - **Prompt Injection & Jailbreak Defense** — multi-layered lexical and heuristic detection (`src/security/injection.py`) neutralizing DAN, role-play jailbreaks, delimiter hijacking, and system override attempts.
 - **Multimodal Ingestion & Context Compression** — extracts structured PDF tables into Markdown matrices, captures embedded figures, and dynamically prunes redundant tokens (saving 30–50% LLM prompt tokens).
 - **Asynchronous Ingestion Worker Queue** — background thread queue (`POST /ingest/jobs`) with real-time polling and HMAC-SHA256 signed webhooks.
-- **Multi-Agent Consensus & Adversarial Debate** — 3-agent jury network (`--mode consensus`) pitting a Proposer against an Adversarial Critic with Consensus Judge arbitration.
+- **Multi-Agent Consensus & Adversarial Debate** — 3-agent jury (`--mode consensus`) that proposes, challenges, and judges **against retrieved chunks**. It abstains instead of inventing examples or metrics; a lexical overlap backstop drops leftover ungrounded sentences.
 - **Rate limiting** at two layers: a per-client sliding window (`src/api/rate_limit.py`, Redis-backed when available via `RATE_LIMIT_BACKEND=auto|redis`) and a process-wide token/query budget (`src/guardrails.py`).
 - **Cost control**: every LLM call carries a hard `timeout`, `max_retries`, and `max_tokens` (`src/llm.py`); actual token usage is tracked per query and checked against per-minute/per-hour budgets before dispatch.
 - **LLM fallback** — optional Groq secondary (`GROQ_API_KEY`) retries automatically when OpenAI rate-limits or fails; embeddings stay on OpenAI.

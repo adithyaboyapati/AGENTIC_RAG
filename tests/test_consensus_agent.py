@@ -1,4 +1,4 @@
-"""Tests for Phase 15: Multi-Agent Consensus & Adversarial Debate."""
+"""Tests for Phase 8: Multi-Agent Consensus & Adversarial Debate."""
 
 from unittest.mock import patch
 
@@ -66,6 +66,92 @@ def test_consensus_propose_and_challenge_nodes():
         assert "critique" in critique_res
         assert "No unsupported claims found" in critique_res["critique_summary"]
         assert len(critique_res["steps"]) == 1
+
+
+def test_finalize_judgment_extracts_answer_and_score():
+    from src.graph.consensus_graph import finalize_judgment
+
+    raw = (
+        "Final Consensus Answer: Self-RAG uses reflection tokens.\n"
+        "Confidence Score: 0.96\n"
+        "Adjudication Summary: Supported by context."
+    )
+    answer, score, _note = finalize_judgment(
+        raw,
+        context="Self-RAG trains reflection tokens to control retrieval.",
+        critique="Unsupported Claims: None",
+    )
+    assert "Self-RAG uses reflection tokens" in answer
+    assert "Adjudication Summary" not in answer
+    assert score == 0.96
+
+
+def test_finalize_judgment_defaults_unstated_score():
+    from src.graph.consensus_graph import finalize_judgment
+
+    answer, score, note = finalize_judgment(
+        "Final Consensus Answer: CRAG grades retrieved documents.",
+        context="CRAG grades retrieved documents before generation.",
+    )
+    assert "CRAG grades retrieved documents" in answer
+    assert score == 0.5
+    assert "unstated" in note
+
+
+def test_finalize_judgment_drops_ungrounded_examples():
+    from src.graph.consensus_graph import ABSTAIN_ANSWER, finalize_judgment
+
+    raw = (
+        "Final Consensus Answer: Naive RAG uses indexing, retrieval, and generation. "
+        "It works well when asking for the capital of a country and for FAQ prototyping.\n"
+        "Confidence Score: 0.95"
+    )
+    context = (
+        "Naive RAG follows indexing, retrieval, and generation. "
+        "Modular RAG adds a Search module and supports iterative retrieval."
+    )
+    answer, score, note = finalize_judgment(raw, context)
+    assert "capital of a country" not in answer.lower()
+    assert "faq" not in answer.lower()
+    assert "indexing" in answer.lower()
+    assert score < 0.95
+    assert "dropped" in note
+    assert answer != ABSTAIN_ANSWER
+
+
+def test_parse_confidence_score_accepts_one_and_ignores_body_percents():
+    from src.graph.consensus_graph import parse_confidence_score
+
+    raw = (
+        "Final Consensus Answer: Accuracy improved by 30% in one cited experiment.\n"
+        "Confidence Score: 1.0\n"
+        "Adjudication Summary: Grounded."
+    )
+    assert parse_confidence_score(raw) == 1.0
+    assert parse_confidence_score("Final Consensus Answer: just text.") is None
+
+
+def test_consensus_disabled_raises(monkeypatch):
+    from src.config import settings
+    from src.runner import _dispatch
+
+    monkeypatch.setattr(settings, "consensus_agent_enabled", False)
+    try:
+        _dispatch("What is RAG?", "consensus")
+        raise AssertionError("expected ValueError")
+    except ValueError as exc:
+        assert "disabled" in str(exc).lower()
+
+
+def test_ask_consensus_abstains_without_docs():
+    fake_llm = FakeListChatModel(responses=["should not be called"])
+    with patch("src.graph.consensus_graph.retrieve", return_value=[]), patch(
+        "src.graph.consensus_graph.get_llm", return_value=fake_llm
+    ) as llm_mock:
+        resp = ask_consensus("Invent tasks where Naive RAG is enough")
+        assert "does not contain enough information" in resp.answer
+        assert resp.consensus_score == 0.0
+        llm_mock.assert_not_called()
 
 
 def test_consensus_adjudicate_node():

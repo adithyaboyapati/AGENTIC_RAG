@@ -48,7 +48,7 @@ python -m src.evaluation.retrieval_metrics --offline
 # Live retrieval metrics vs data/eval/golden_qa.json
 python -m src.evaluation.retrieval_metrics
 
-# RAGAS-inspired LLM-judge across all 7 modes → ragas_eval_results.json
+# RAGAS-inspired LLM-judge across all 8 modes → ragas_eval_results.json
 python -m src.evaluation.evaluate_all_modes
 ```
 

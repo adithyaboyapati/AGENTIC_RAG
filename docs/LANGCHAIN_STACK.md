@@ -43,7 +43,7 @@ and [PRODUCTION.md](PRODUCTION.md).
 | `src/graph/multi_hop_graph.py` | Phase 5 — sequential retrieval loop with reflection |
 | `src/graph/tools_graph.py` | Phase 6 — tool-calling agent (`llm.bind_tools()`) |
 | `src/graph/agent_graph.py` | Phase 7 — full orchestrator; reuses the phase graphs above as sub-nodes |
-| `src/graph/consensus_graph.py` | Phase 15 — multi-agent adversarial debate (Proposer + Critic + Judge) |
+| `src/graph/consensus_graph.py` | Phase 8 — retrieve → propose → challenge → judge; abstain / lexical overlap backstop |
 
 ## Schemas & Response Building
 

@@ -4,7 +4,7 @@
 > **Repository**: `Agentic_RAG`  
 > **Last reviewed against source**: 2026-08-19  
 > **Core Frameworks**: LangChain Core/Community, LangGraph, FastAPI, ChromaDB, OpenAI, Groq, NVIDIA NeMo Reranker, Redis, React + Vite, Prometheus, Grafana.  
-> **Supported Operational Modes**: `baseline` (Phase 1), `router` (Phase 2), `crag` (Phase 3), `decompose` (Phase 4), `multi_hop` (Phase 5), `tools` (Phase 6), `agentic` (Phase 7), `consensus` (Phase 15).  
+> **Supported Operational Modes**: `baseline` (Phase 1), `router` (Phase 2), `crag` (Phase 3), `decompose` (Phase 4), `multi_hop` (Phase 5), `tools` (Phase 6), `agentic` (Phase 7), `consensus` (Phase 8).  
 > **Cross-cutting phases**: Phase 8 production API, Phase 8.5 hardening, Phase 9 streaming/cache/metrics, Phase 10 semantic cache & RBAC, Phase 11 multimodal & compression, Phase 12 async ingest & webhooks.
 
 ---
@@ -229,7 +229,7 @@ Agentic_RAG/
 │   │   └── run_eval.py
 │   ├── graph/
 │   │   ├── agent_graph.py         # Mode 7: router → strategy → subgraph → CRAG loop
-│   │   ├── consensus_graph.py     # Mode 15: retrieve → propose → challenge → adjudicate
+│   │   ├── consensus_graph.py     # Mode 8: retrieve → propose → challenge → adjudicate | abstain
 │   │   ├── crag_graph.py          # Mode 3: retrieve → grade → generate | rewrite | fallback
 │   │   ├── decompose_graph.py     # Mode 4: Send map-reduce
 │   │   ├── multi_hop_graph.py     # Mode 5: analyze → hop → reflect loop
@@ -288,7 +288,7 @@ Agentic_RAG/
 | `src/retrieval/compression.py` | Sentence pruning (ratio 0.65) | Yes if enabled, via `format_docs` | `compress_documents()`, `_score_sentence()` | `re`, `math` |
 | `src/retrieval/citations.py` | Provenance assembly | Yes (every mode) | `build_response()`, `docs_to_citations()` | `src.schemas` |
 | `src/graph/agent_graph.py` | Full orchestrator | Mode `agentic` | `build_full_agent_graph()`, `ask_agentic()` | subgraphs + grader |
-| `src/graph/consensus_graph.py` | 3-agent debate | Mode `consensus` | `ask_consensus()` | prompts, retrieve |
+| `src/graph/consensus_graph.py` | 3-agent debate + abstain/overlap filter | Mode `consensus` | `ask_consensus()` | prompts, retrieve |
 | `src/ingestion/queue.py` | Async ingest + webhooks | Ingest API | `IngestionQueue`, HMAC `sha256=` | `ThreadPoolExecutor` |
 | `src/api/server.py` | HTTP/SSE | Yes (HTTP) | `/query`, `/query/stream`, `/ingest/jobs`, `/health` | FastAPI |
 | `src/streaming.py` | Progressive events | SSE path | `use_emitter`, `CancelledRun` | `ContextVar` |
@@ -538,7 +538,7 @@ STAGE 6: CRAG SAFETY NET, GENERATION, EGRESS
 | **Recovery from Bad Retrieval** | Hallucinates or fails silently | Rewrite up to `MAX_RETRIEVAL_RETRIES` then web fallback | `src/graph/crag_graph.py` |
 | **Query Complexity Handling** | Single holistic query embedding | Parallel decomposition (`Send` API, 1–5 sub-queries) | `src/graph/decompose_graph.py` |
 | **Tool Capabilities** | Vector database only | Dynamic tool selection (Vector RAG, Web, Safe Math) | `src/tools/all_tools.py` |
-| **Adversarial Verification** | None | 3-Agent Proposer / Challenger / Consensus Judge debate | `src/graph/consensus_graph.py` |
+| **Adversarial Verification** | None | 3-agent debate over retrieved chunks; abstains when evidence is missing | `src/graph/consensus_graph.py` |
 | **Context Window Hygiene** | Stuffs raw chunks verbatim | Dynamic sentence-level query-informed token compression | `src/retrieval/compression.py` |
 | **Caching** | None | Exact Redis + cosine semantic (tenant+role keys); skipped when chat history present | `src/cache/redis_cache.py` |
 | **Streaming** | Blocking response | SSE `step`/`token`/`answer` with disconnect cancellation | `src/streaming.py` |
@@ -590,11 +590,12 @@ STAGE 6: CRAG SAFETY NET, GENERATION, EGRESS
 - **Chain**: `FOLLOWUP_PROMPT | get_llm().with_structured_output(FollowUpQuestions)` with exactly 3 questions.
 - **Invoked by the runner after every successful (non-abort) mode**, not inside the graphs. Grounding: extra `retrieve(top_k=3)` unless sources are only `web search`/`tools`. Failures return `[]`.
 
-### 8. Multi-Agent Consensus Jury (Phase 15)
+### 8. Multi-Agent Consensus Jury (Phase 8)
 - **File**: `src/graph/consensus_graph.py`
 - **Agents**: Proposer (`PROPOSER_PROMPT`) → Challenger (`CHALLENGER_PROMPT`) → Consensus Judge (`CONSENSUS_JUDGE_PROMPT`).
-- **Score**: regex-parsed from judge text (`Confidence Score: 0.95` or `95%`); default 0.92 if unparseable. Exposed as `consensus_score` + `critique_summary` on `QueryResponse`.
-- **Config**: `CONSENSUS_AGENT_ENABLED`, `CONSENSUS_MAX_ROUNDS` (currently 1 linear pass), `CONSENSUS_MIN_CONFIDENCE=0.80`.
+- **Score**: regex-parsed from a `Confidence Score:` line only (`0.95`, `1.0`, or `95%`); default **0.50** if unparseable (never a silent 0.92). Capped after unsupported-claim flags and dropped low-overlap sentences. Exposed as `consensus_score` + `critique_summary` on `QueryResponse`.
+- **Backstops**: empty retrieval → `abstain` node (no LLM); indirect-injection chunks dropped; follow-ups skipped when score < 0.4 or the abstain template is used.
+- **Config**: `CONSENSUS_AGENT_ENABLED` (runner rejects the mode when false), `CONSENSUS_MAX_ROUNDS` (reserved; graph is one pass), `CONSENSUS_MIN_CONFIDENCE=0.80` (appends a grounding caveat below the floor).
 
 ### 9. Generation LCEL Chains (not agents, but always in the loop)
 - **File**: `src/chains/generation.py`
@@ -701,7 +702,7 @@ stateDiagram-v2
         A_Fallback --> [*]
     }
 
-    state "Mode 15: Multi-Agent Consensus Graph" as ConsensusGraph {
+    state "Mode 8: Multi-Agent Consensus Graph" as ConsensusGraph {
         [*] --> Consensus_Retrieve
         Consensus_Retrieve --> Consensus_Propose
         Consensus_Propose --> Consensus_Challenge
@@ -1348,7 +1349,7 @@ SSE errors are `event.type=error` in-band (timeouts, disconnect, guardrails) rat
 - **`CACHE_ENABLED` defaults false** — semantic cache is also no-op until that flag is on (compose production sets it true).
 - **Agentic is classify-then-strategy**, then CRAG-grades every retrieval subgraph — not “strategy first”.
 - **Follow-ups and citations are runner/citation-layer concerns**, not graph state.
-- **CLI has no `--mode consensus`** even though `_dispatch` and the API do.
+- **CLI `--mode` includes `consensus`** (choices come from `MODE_LABELS`).
 - **Request `tenant_id` isolates caches**; graph `retrieve(query)` currently uses the default `RBACContext` unless a future caller threads it through.
 - **SSE cancellation uses `BaseException`** so node `except Exception` cannot keep spending after disconnect.
 

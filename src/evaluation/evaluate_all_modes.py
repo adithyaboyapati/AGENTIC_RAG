@@ -1,5 +1,5 @@
 """
-Comprehensive evaluation of all 7 modes using RAGAS-inspired metrics.
+Comprehensive evaluation of all 8 modes using RAGAS-inspired metrics.
 
 Run:
     python -m src.evaluation.evaluate_all_modes
@@ -77,7 +77,7 @@ def main() -> None:
         "Compare naive RAG and advanced RAG",
     ]
 
-    modes = ["baseline", "router", "crag", "decompose", "multi_hop", "tools", "agentic"]
+    modes = ["baseline", "router", "crag", "decompose", "multi_hop", "tools", "agentic", "consensus"]
 
     results: list[ModeEvalResult] = []
 
@@ -141,6 +141,7 @@ def main() -> None:
         print("\n💡 Use 'baseline' or 'router' for speed")
         print("💡 Use 'crag' or 'agentic' for quality")
         print("💡 'decompose' excels at comparisons")
+        print("💡 'consensus' is stricter on grounding and will abstain when chunks are insufficient")
 
 
 if __name__ == "__main__":

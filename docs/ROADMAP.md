@@ -1,7 +1,8 @@
 # Learning Roadmap — Phase by Phase
 
-**Status:** Phases 0–9 complete (including Phase 8.5 hardening and Phase 9 production
-features: frontend, streaming, cache, metrics, circuit breakers, golden eval).
+**Status:** Phases 0–9 complete (Phase 8 is the Consensus agent mode; Phase 8.5 is
+hardening; Phase 9 is production features: frontend, streaming, cache, metrics, circuit
+breakers, golden eval).
 
 Each phase has **learning goals**, **what to build**, and **how to verify you understood it**.
 
@@ -16,13 +17,13 @@ Each phase has **learning goals**, **what to build**, and **how to verify you un
 | 5 Multi-hop | ✅ Done | `--mode multi_hop` | React / Streamlit |
 | 6 Tools | ✅ Done | `--mode tools` | React / Streamlit |
 | 7 Full Agent | ✅ Done | `--mode agentic` | React / Streamlit |
-| 8 Production | ✅ Done | REST API + eval suite | N/A |
+| 8 Consensus | ✅ Done | `--mode consensus` | React / Streamlit |
+| Eval & API | ✅ Done | REST API + eval suite | N/A |
 | 8.5 Hardening | ✅ Done | N/A (cross-cutting) | N/A |
 | 9 Prod features | ✅ Done | Cache, metrics, SSE, golden eval | React (primary) |
 | 10 Semantic Cache & RBAC | ✅ Done | Multi-tenant + vector cache | React / REST API |
 | 11 Multimodal & Compression | ✅ Done | Tables/Figures + Context Pruner | React / REST API |
 | 12 Async Ingest & Webhooks | ✅ Done | Background Queue + Webhooks | REST API |
-| 15 Multi-Agent Consensus | ✅ Done | Proposer + Critic + Judge | React / REST API |
 
 ---
 
@@ -269,11 +270,30 @@ Compare this with Phase 1 baseline on the same question — you'll see the diffe
 
 ---
 
-## Phase 8: Evaluation & Metrics ✅ COMPLETE
+## Phase 8: Multi-Agent Consensus & Adversarial Debate ✅ COMPLETE
+
+- **Proposer Agent** (`src/graph/consensus_graph.py`) — drafts from retrieved context only; must abstain when the chunks do not contain the asked comparison, metric, or example
+- **Adversarial Challenger Agent** — flags claims that are not in the sources; must not demand extra world knowledge
+- **Consensus Judge** — strips unsupported claims, may abstain, reports a grounding confidence score (not a fluency score)
+- **Grounding backstops** — skip the debate when retrieval is empty; drop low-overlap sentences; cap/default the score (no silent `0.92`); caveat below `CONSENSUS_MIN_CONFIDENCE`; skip follow-ups on abstention
+- **CLI / API / UI** — `--mode consensus`, `mode="consensus"` on REST, React and Streamlit mode pickers
+
+```bash
+python -m src.cli ask "Compare the performance trade-offs between Naive RAG and Modular RAG" --mode consensus -v
+```
+
+### Checkpoint
+The eighth agent mode **debates over retrieved chunks** and abstains instead of inventing examples or metrics.
+
+---
+
+## Evaluation & Metrics ✅ COMPLETE
+
+*(Originally the post-orchestrator eval gate in this roadmap; the eighth **agent mode** is Phase 8 Consensus above.)*
 
 ### What Was Built
 - **RAGAS-Inspired Metrics** (`src/evaluation/metrics.py`) — LLM-as-judge evaluation
-- **Comprehensive Evaluation** (`src/evaluation/evaluate_all_modes.py`) — tests all 7 modes
+- **Comprehensive Evaluation** (`src/evaluation/evaluate_all_modes.py`) — tests all 8 modes
 - **Metrics Computed**:
   - **Faithfulness** — Is answer grounded in context (not hallucinated)?
   - **Answer Relevance** — Does answer address the original question?
@@ -415,13 +435,6 @@ After Phase 8, production feedback led to new capabilities:
 - **Job Status & Progress Polling** (`POST /ingest/jobs`, `GET /ingest/jobs/{job_id}`, `GET /ingest/jobs`) — real-time progress percentages, chunk metrics, and failure diagnostics
 - **HMAC-Signed Webhooks** — automated callbacks with `X-Hub-Signature-256` signature verification upon job completion or failure
 - **Ingestion Prometheus Metrics** — tracks `rag_ingest_jobs_total`, `rag_ingest_chunks_total`, and `rag_ingest_duration_seconds`
-
-## Phase 15: Multi-Agent Consensus & Adversarial Debate ✅ COMPLETE
-
-- **Proposer Agent** (`src/graph/consensus_graph.py`) — drafts comprehensive initial answer grounded strictly in retrieved context
-- **Adversarial Challenger Agent** — probes the thesis for over-generalizations, missing context, and unsupported assertions
-- **Consensus Judge & Synthesizer** — arbitrates between Proposer and Critic to produce a battle-tested final response with a quantitative Consensus Confidence Score (0.0–1.0)
-- **FastAPI & Streaming Integration** — supports `--mode consensus` and `mode="consensus"` in REST API with streaming debate steps
 
 All of these are **optional or env-gated** — local CLI/dev still works with OpenAI + a local Chroma
 dir. For production, Redis + Chroma HTTP + frontend + Prometheus/Grafana (see

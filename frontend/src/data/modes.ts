@@ -53,8 +53,8 @@ export const MODES: ModeMeta[] = [
   {
     id: 'consensus',
     label: 'Consensus Debate',
-    phase: 'Phase 15',
-    description: 'Multi-agent adversarial debate: Proposer drafts → Challenger critiques → Consensus Judge arbitrates.',
+    phase: 'Phase 8',
+    description: 'Adversarial debate over retrieved chunks. Abstains instead of inventing examples or metrics.',
     example: 'Compare the performance trade-offs between Naive RAG and Modular RAG',
   },
 ]

@@ -75,7 +75,7 @@ python -m src.cli ask "What is Self-RAG?" --mode crag -v
 #  - multi_hop: Sequential retrieval with reflection
 #  - tools: Tool-augmented agent (retrieve, web, calculator)
 #  - agentic: Unified orchestrator (picks best strategy)
-#  - consensus: Multi-agent debate (Proposer + Critic + Consensus Judge)
+#  - consensus: Multi-agent debate (retrieve → propose → challenge → judge; abstains if chunks are insufficient)
 ```
 
 ### Option D: REST API
@@ -152,6 +152,12 @@ Watch: Agent selects retrieval for Self-RAG, calculator for math.
 python -m src.cli ask "Compare RAG vs Agentic RAG and explain Self-RAG grading" --mode agentic -v
 ```
 Watch: System analyzes complexity and picks optimal strategy.
+
+### 6. **Grounded debate** (Consensus mode)
+```bash
+python -m src.cli ask "Compare the performance trade-offs between Naive RAG and Modular RAG" --mode consensus -v
+```
+Watch: Proposer / Challenger / Judge stay on retrieved chunks. If the survey does not list metrics or task examples, the mode should abstain rather than invent them.
 
 ---
 
@@ -366,7 +372,7 @@ python -m src.ingestion.ingest --source data/sample_docs
 
 ## Additional Resources
 
-- **Learning Path**: [ROADMAP.md](ROADMAP.md) (phases 0–9, all complete)
+- **Learning Path**: [ROADMAP.md](ROADMAP.md) (phases 0–9, all complete; eighth agent mode is Consensus)
 - **Architecture**: [LANGCHAIN_STACK.md](LANGCHAIN_STACK.md)
 - **Production Deployment**: [PRODUCTION.md](PRODUCTION.md) (Docker, Redis cache, Prometheus/Grafana)
 - **Guardrails & Rate Limiting**: [GUARDRAILS.md](GUARDRAILS.md)

@@ -207,10 +207,10 @@ class Settings(BaseSettings):
     ingest_job_retention_seconds: int = 86400  # 24 hours
     webhook_secret: str = ""
 
-    # Phase 15: Multi-Agent Consensus & Adversarial Debate
-    consensus_agent_enabled: bool = True
-    consensus_max_rounds: int = 1
-    consensus_min_confidence: float = 0.80
+    # Phase 8: Multi-Agent Consensus & Adversarial Debate
+    consensus_agent_enabled: bool = True  # runner rejects mode=consensus when false
+    consensus_max_rounds: int = 1  # reserved; graph is a single propose→challenge→judge pass
+    consensus_min_confidence: float = 0.80  # below this, a grounding caveat is appended
 
     # Conversation memory (Supabase + compact prompt packing)
     memory_enabled: bool = True

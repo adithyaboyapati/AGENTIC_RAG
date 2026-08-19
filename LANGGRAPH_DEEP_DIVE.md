@@ -94,9 +94,9 @@ Every **agentic mode except baseline** is an autonomous compiled `StateGraph`. D
 4. **`multi_hop`** (`src/graph/multi_hop_graph.py`): Phase 5. `analyze` → `retrieve_hop` → `reflect` loop. Extra stop: single-hop questions synthesize after hop 1.
 5. **`tools`** (`src/graph/tools_graph.py`): Phase 6. `classify` → `tools_agent` (Python ReAct loop inside **one** node). Abort after 3 quarantines.
 6. **`agentic`** (`src/graph/agent_graph.py`): Phase 7. Router + strategy + **subgraph `.invoke()`** (not `add_node(subgraph)`) + CRAG. Rewrite node **already calls `retrieve()`**, so the loop is **`rewrite` → `grade`**.
-7. **`consensus`** (`src/graph/consensus_graph.py`): Phase 15 linear DAG. **Eager** `compile()` at import (`_consensus_graph = build_consensus_graph()`). No abort/node_gate.
+7. **`consensus`** (`src/graph/consensus_graph.py`): Phase 8 DAG. Lazy `get_consensus_graph()`. After `retrieve`, a conditional edge **abstains** when there are no documents. Debate is propose → challenge → adjudicate, then `finalize_judgment` (score parse + lexical overlap). Indirect-injection chunks are dropped at retrieve. No `abort` flag.
 
-**Compilation pattern**: all graphs except consensus use lazy singletons (`get_*_graph()`). `compile()` is called **without** a checkpointer, `interrupt_before`, or `recursion_limit` override (LangGraph default recursion limit is 25). State is **request-scoped**; conversation memory lives in `src/runner.py`, not in LangGraph threads.
+**Compilation pattern**: all mode graphs use lazy singletons (`get_*_graph()`). `compile()` is called **without** a checkpointer, `interrupt_before`, or `recursion_limit` override (LangGraph default recursion limit is 25). State is **request-scoped**; conversation memory lives in `src/runner.py`, not in LangGraph threads.
 
 ---
 
@@ -259,7 +259,7 @@ No `abort`. `route_condition` returns `state["route"]` directly (must already be
 
 ---
 
-#### 7. `ConsensusState` (`src/graph/consensus_graph.py`) — Phase 15 Multi-Agent Debate
+#### 7. `ConsensusState` (`src/graph/consensus_graph.py`) — Phase 8 Multi-Agent Debate
 
 | Field | Type | Initial Value | Written By | Read By | Purpose | Reducer |
 |---|---|---|---|---|---|---|
@@ -269,8 +269,8 @@ No `abort`. `route_condition` returns `state["route"]` directly (must already be
 | `proposal` | `str` | `""` | `propose_node` | Challenger, Judge | Proposer's initial thesis | `None` |
 | `critique` | `str` | `""` | `challenge_node` | Adjudicate node | Adversarial critique | `None` |
 | `critique_summary`| `str` | `""` | `challenge_node` | `AgentResponse` | 1-line critique summary | `None` |
-| `answer` | `str` | `""` | `adjudicate_node`| Caller | Consensus judgment | `None` |
-| `consensus_score` | `float` | `0.0` | `adjudicate_node`| Caller | Confidence score ($0.0 \dots 1.0$) | `None` |
+| `answer` | `str` | `""` | `adjudicate_node` / `abstain_node` | Caller | Final answer or abstention | `None` |
+| `consensus_score` | `float` | `0.0` | `adjudicate_node` / `abstain_node` | Caller | Grounding score ($0.0 \dots 1.0$); default 0.50 if unstated | `None` |
 | `steps` | `list[str]` | `[]` | All nodes | UI Trace | Debate step trace | `operator.add` |
 
 ---
@@ -411,7 +411,7 @@ Early `if state.get("abort"): return {}` means “no channel updates”. `steps`
 | `decompose` / `retrieve_sub` / `synthesize` | `src/graph/decompose_graph.py` | | Map-reduce | sub_queries / Send payload | `sub_results`, `answer` | `decompose_chain`, `retrieve`, `synthesis_chain` |
 | `analyze` / `retrieve_hop` / `reflect` / `synthesize` | `src/graph/multi_hop_graph.py` | | Sequential hops | `search_query`, hops | `hop_results`, `sufficient` | `analyze_chain`, `retrieve`, `reflect_chain` |
 | `tools_agent` | `src/graph/tools_graph.py` | `tools_agent_node` | In-node ReAct | `messages` | `messages`, `documents`, `answer`, `abort` | `bind_tools`; `retrieve_docs` calls `retrieve()` directly |
-| `retrieve` / `propose` / `challenge` / `adjudicate` | `src/graph/consensus_graph.py` | | Linear debate | `context`, `proposal`, `critique` | `proposal`, `critique`, `answer`, `consensus_score` | prompts \| llm; score regex-parsed |
+| `retrieve` / `propose` / `challenge` / `adjudicate` / `abstain` | `src/graph/consensus_graph.py` | | Retrieve then debate, or abstain | `context`, `proposal`, `critique` | `proposal`, `critique`, `answer`, `consensus_score` | prompts \| llm; `finalize_judgment` score + overlap filter |
 
 ---
 
@@ -457,7 +457,7 @@ Every node in this codebase adheres to a rigorous 4-step execution lifecycle:
 | **Error Handling** | Node gates set `abort=True` on contract violation | Routes to `abort_node` via conditional edge mappings |
 | **Streaming** | Pushes SSE events via ContextVar emitter | Emits node transition snapshots via `stream_mode="values"` |
 
-Not every graph uses this lifecycle. **Router, decompose, multi-hop, and consensus have no `abort` flag and no node_gate.** Gates (`check_route`, `check_strategy`, `check_answer`, `check_web_context`, `check_tool_result`) are on **crag, tools, and agentic** only. Indirect injection on tool/web/docs is `scan_context` inside `node_gate`.
+Not every graph uses this lifecycle. **Router, decompose, and multi-hop have no `abort` flag and no node_gate.** Consensus has no `abort` flag; it **abstains** on empty retrieval and quarantines injected chunks at `retrieve_node`. Gates (`check_route`, `check_strategy`, `check_answer`, `check_web_context`, `check_tool_result`) are on **crag, tools, and agentic** only. Indirect injection on tool/web/docs is `scan_context` inside `node_gate` (consensus calls `check_indirect_injection` directly).
 
 Node-gate outcomes: `ok` | `quarantine` (tools: substitute a safe ToolMessage, count toward `MAX_TOOL_FAILURES=3`) | `abort` (set `abort=True`, later `abort_node` + `error_code=node_gate_abort` on `AgentResponse`).
 
@@ -948,7 +948,7 @@ To master how LangGraph works in this repository, study the codebase in this pre
 6. `src/graph/tools_graph.py` ────> In-node ReAct, quarantine, `MAX_TOOL_FAILURES`
            │
            ▼
-7. `src/graph/consensus_graph.py` ─> Linear multi-agent DAG (eager compile)
+7. `src/graph/consensus_graph.py` ─> Retrieve → debate or abstain; lexical score backstop
            │
            ▼
 8. `src/graph/agent_graph.py` ────> Meta-orchestrator: `.invoke()` subgraphs, CRAG, abort

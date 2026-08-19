@@ -30,7 +30,7 @@ MODE_LABELS = {
     "multi_hop": "Phase 5 — Multi-Hop Retrieval",
     "tools": "Phase 6 — Tool-Augmented Agent",
     "agentic": "Phase 7 — Full Agentic RAG",
-    "consensus": "Phase 15 — Multi-Agent Consensus Debate",
+    "consensus": "Phase 8 — Multi-Agent Consensus Debate",
 }
 
 MODE_DESCRIPTIONS = {
@@ -41,7 +41,7 @@ MODE_DESCRIPTIONS = {
     "multi_hop": "Chains sequential retrievals where each hop builds on the last.",
     "tools": "Agent picks tools: retrieve docs, web search, or calculate. Uses function calling.",
     "agentic": "Full orchestrator: analyzes question → picks strategy (decompose/multi-hop/tools/simple) → grades → generates.",
-    "consensus": "Multi-agent adversarial debate: Proposer drafts → Challenger critiques → Consensus Judge arbitrates.",
+    "consensus": "Multi-agent debate over retrieved chunks: Proposer → Challenger → Judge. Abstains when the sources cannot support the question.",
 }
 
 EXAMPLE_QUESTIONS = {
@@ -87,6 +87,10 @@ def _dispatch(question: str, mode: str) -> AgentResponse:
 
         return ask_agentic(question)
     if mode == "consensus":
+        if not settings.consensus_agent_enabled:
+            raise ValueError(
+                "Consensus mode is disabled (CONSENSUS_AGENT_ENABLED=false)"
+            )
         from src.graph.consensus_graph import ask_consensus
 
         return ask_consensus(question)
@@ -211,6 +215,13 @@ def _finalize_agent_result(
 def _attach_follow_ups(question: str, result: AgentResponse) -> list[str]:
     """Generate follow-ups from the user question + answer/context; never fail the request."""
     try:
+        if result.mode == "consensus":
+            from src.graph.consensus_graph import ABSTAIN_ANSWER
+
+            score = result.consensus_score
+            if result.answer == ABSTAIN_ANSWER or (score is not None and score < 0.4):
+                return []
+
         from src.agents.followups import generate_follow_ups
 
         return generate_follow_ups(

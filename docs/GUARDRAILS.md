@@ -338,7 +338,7 @@ valid, violations = QualityGuardrails.validate(
 )
 ```
 
-Run `python -m src.evaluation.evaluate_all_modes` to score all 7 modes this way.
+Run `python -m src.evaluation.evaluate_all_modes` to score all 8 modes this way.
 
 ### Online Mode (Optional — `QUALITY_GUARDRAILS_ENABLED=true`)
 
@@ -356,6 +356,20 @@ QUALITY_MIN_CONTEXT_PRECISION=0.5
 **Trade-off**: Ensures high-quality output but doubles query latency and cost. Recommended for
 quality-critical applications (customer support) where latency is less critical than answer
 correctness.
+
+### Consensus-mode grounding (always on for `mode=consensus`)
+
+Quality guardrails above are optional extra LLM judges. Consensus has **deterministic**
+grounding checks in `src/graph/consensus_graph.py`:
+
+- Debate is skipped when retrieval returns no documents.
+- Prompts require abstention when chunks lack the asked comparison / example / metric.
+- After the judge writes, sentences with weak lexical overlap vs the context are dropped.
+- `consensus_score` defaults to **0.50** if unstated (not 0.92), and is capped after unsupported flags.
+- Below `CONSENSUS_MIN_CONFIDENCE` a caveat is appended. Follow-ups are skipped on abstention.
+
+This is still not span-level citation verification. Enable `QUALITY_GUARDRAILS_ENABLED` if you
+also want an LLM faithfulness score on the live path.
 
 ### Golden Retrieval Evaluation
 

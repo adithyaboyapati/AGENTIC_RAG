@@ -332,25 +332,28 @@ Follow-ups:
 These are generated from the original answer + source snippets, so they stay relevant
 and grounded. No more random suggestions.
 
-### 7. Multi-Agent Consensus & Adversarial Debate
+### 7. Multi-Agent Consensus & Adversarial Debate (Phase 8)
 
-When factual precision is mission-critical (compliance, legal, medical), single-agent answers can overlook nuances or propagate subtle hallucinations:
+When a single generator might over-complete an answer, consensus runs three agents over the **same retrieved context**:
 
 ```
 User Query ──▶ [Retrieve & Compress]
                      │
+                     ├─ no documents ──▶ abstain (no LLM debate)
                      ▼
-           [Proposer Agent] ──▶ Drafts initial thesis with citations
+           [Proposer Agent] ──▶ Draft using only the chunks
                      │
                      ▼
-        [Adversarial Critic] ──▶ Probes for ungrounded claims & missing nuances
+        [Adversarial Critic] ──▶ Flags claims not in the chunks
                      │
                      ▼
-         [Consensus Judge] ──▶ Arbitrates debate, strips unproven assertions,
-                               and assigns Consensus Confidence Score (0.0–1.0)
+         [Consensus Judge] ──▶ Strips unsupported claims; may abstain
+                     │
+                     ▼
+         [Lexical backstop] ──▶ Drops sentences with weak overlap vs context
 ```
 
-Accessible via `--mode consensus`, this ensures answers are vetted under adversarial debate before reaching the user.
+Use `--mode consensus` (CLI, API, or UI). This **reduces** fluency-driven hallucination; it is not span-level proof that every token appears in a chunk. Confidence is a grounding self-score (default **0.50** if the judge omits it, capped after flags/dropped sentences). Below `CONSENSUS_MIN_CONFIDENCE` (default 0.80) a caveat is appended. Follow-ups are skipped on abstentions.
 
 ### 8. Multimodal Ingestion & Dynamic Context Compression
 

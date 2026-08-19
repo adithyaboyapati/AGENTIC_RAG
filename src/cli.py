@@ -9,6 +9,7 @@ Modes:
   multi_hop — Phase 5: sequential multi-hop retrieval (LangGraph loop)
   tools     — Phase 6: tool-augmented agent (function calling)
   agentic   — Phase 7: full agentic RAG (orchestrator)
+  consensus — Phase 8: multi-agent debate (retrieve → propose → challenge → judge)
 """
 
 from __future__ import annotations
@@ -68,6 +69,16 @@ def run_query(question: str, mode: str, verbose: bool = False) -> None:
             console.print(
                 Panel(result.grade_summary, title="Grader Summary", border_style="yellow")
             )
+        if result.consensus_score is not None:
+            critique = result.critique_summary or "—"
+            console.print(
+                Panel(
+                    f"Confidence: [bold]{result.consensus_score:.2f}[/bold]\n"
+                    f"Critique: {critique}",
+                    title="Consensus",
+                    border_style="green",
+                )
+            )
         if result.steps:
             console.print(
                 Panel("\n".join(f"• {step}" for step in result.steps), title="Agent Steps", border_style="blue")
@@ -80,6 +91,7 @@ def run_query(question: str, mode: str, verbose: bool = False) -> None:
 
 def main() -> None:
     from src.logging_config import setup_logging
+    from src.runner import MODE_LABELS
 
     setup_logging()
     init_langsmith_tracing()
@@ -90,7 +102,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="baseline",
-        choices=["baseline", "router", "crag", "decompose", "multi_hop", "tools", "agentic"],
+        choices=list(MODE_LABELS),
         help="RAG mode (see docs/ROADMAP.md)",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Show sources and agent steps")

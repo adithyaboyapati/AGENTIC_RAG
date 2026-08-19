@@ -127,7 +127,7 @@ def main() -> None:
 
     with st.sidebar:
         st.title("Agentic RAG Lab")
-        st.caption("Project-based learning — Phases 1–7")
+        st.caption("Project-based learning — Phases 1–8")
 
         mode = st.selectbox(
             "Agent mode",

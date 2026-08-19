@@ -332,15 +332,47 @@ Follow-ups:
 These are generated from the original answer + source snippets, so they stay relevant
 and grounded. No more random suggestions.
 
+### 7. Multi-Agent Consensus & Adversarial Debate
+
+When factual precision is mission-critical (compliance, legal, medical), single-agent answers can overlook nuances or propagate subtle hallucinations:
+
+```
+User Query ──▶ [Retrieve & Compress]
+                     │
+                     ▼
+           [Proposer Agent] ──▶ Drafts initial thesis with citations
+                     │
+                     ▼
+        [Adversarial Critic] ──▶ Probes for ungrounded claims & missing nuances
+                     │
+                     ▼
+         [Consensus Judge] ──▶ Arbitrates debate, strips unproven assertions,
+                               and assigns Consensus Confidence Score (0.0–1.0)
+```
+
+Accessible via `--mode consensus`, this ensures answers are vetted under adversarial debate before reaching the user.
+
+### 8. Multimodal Ingestion & Dynamic Context Compression
+
+Real enterprise documents contain rich tabular matrices and visual diagrams:
+- **PyMuPDF Structured Table Parser** converts raw PDF grids into clean GitHub-flavored Markdown tables.
+- **Dynamic Context Compression** performs sentence-level token pruning against the query, stripping 30–50% of irrelevant tokens while retaining all critical facts and citations.
+
+### 9. Semantic Vector Caching & Tenant Isolation
+
+- **Vector Semantic Caching** calculates cosine similarity ($\ge 0.94$) against embedding queries, returning sub-millisecond cached responses without LLM spend.
+- **Document RBAC** strictly isolates data per tenant and user role at both vector and BM25 sparse retrieval stages.
+
 ### Resilience & Ops (Production Layer)
 
 Beyond the RAG graphs themselves, the serving path now includes:
 
-- **Redis answer cache** — identical question+mode hits skip retrieval/LLM
+- **Redis answer cache & Vector Semantic Cache** — identical or semantically equivalent questions skip retrieval/LLM with strict RBAC segregation
 - **Groq LLM fallback** — OpenAI quota/outage retries on a secondary chat provider
 - **Circuit breakers** — NVIDIA rerank and web search fail fast when upstreams are unhealthy
-- **Prometheus metrics** — request latency, cache events, fallbacks, rate-limit hits
+- **Prometheus metrics** — request latency, cache events, fallbacks, rate-limit hits, ingestion throughput
 - **SSE streaming** — agent steps and answer tokens as they happen
+- **Asynchronous Ingestion Worker Queue** — background PDF ingestion with progress tracking and HMAC webhooks
 
 These don't change *what* Agentic RAG decides; they make the same agent safe and
 observable under real traffic. See [PRODUCTION.md](PRODUCTION.md).

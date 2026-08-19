@@ -50,6 +50,13 @@ export const MODES: ModeMeta[] = [
     description: 'Orchestrator: analyzes → picks strategy → grades → generates.',
     example: 'Compare RAG vs Agentic RAG; what is Self-RAG grading?',
   },
+  {
+    id: 'consensus',
+    label: 'Consensus Debate',
+    phase: 'Phase 15',
+    description: 'Multi-agent adversarial debate: Proposer drafts → Challenger critiques → Consensus Judge arbitrates.',
+    example: 'Compare the performance trade-offs between Naive RAG and Modular RAG',
+  },
 ]
 
 export function getMode(id: string): ModeMeta {

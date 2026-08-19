@@ -80,6 +80,11 @@ def render_trace(result) -> None:
             for i, q in enumerate(result.sub_queries, 1):
                 st.markdown(f"**Hop {i}:** {q}")
 
+    if getattr(result, "consensus_score", None) is not None:
+        st.success(f"**Consensus Confidence:** `{int(result.consensus_score * 100)}%`")
+        if getattr(result, "critique_summary", None):
+            st.info(f"**Challenger Critique:** {result.critique_summary}")
+
     if result.steps:
         with st.expander("Agent steps", expanded=False):
             for step in result.steps:

@@ -17,14 +17,16 @@ The `main`/`prod` branch is the only supported version.
 
 | Input | Trust | Control |
 |---|---|---|
-| User question | Untrusted | Length/content guardrails, PII policy, API auth, rate limits |
-| Retrieved chunks | Semi-trusted | Only from operator-ingested corpora |
-| Web search results | Untrusted | Circuit breaker, node gates quarantine failures, never treated as evidence when malformed |
-| LLM output | Untrusted | Node gates, output guardrails, privacy filter |
+| User question | Untrusted | Direct jailbreak/injection detector, credential/length guardrails, PII policy, API auth, rate limits |
+| Retrieved chunks | Semi-trusted | Indirect injection scan, node gate quarantine, operator-ingested corpora |
+| Web search results | Untrusted | Indirect injection scan, circuit breaker, node gates quarantine failures |
+| LLM output | Untrusted | System prompt leakage detector, markdown exfiltration scan, output guardrails, privacy filter |
 | Tool arguments | Untrusted | The calculator parses an AST allowlist — never `eval` |
 
 **Controls in place**
 
+- Jailbreak & Prompt Injection defense: multi-layer scanning for direct attacks (DAN, persona bypasses, instruction resets, obfuscated base64/hex/rot13 payloads) and indirect attacks (poisoned context, markdown exfiltration).
+- Hardened system prompts with strict XML delimiter isolation and explicit instruction hierarchy.
 - Constant-time API key comparison; auth mandatory in production.
 - Production startup refuses wildcard CORS, short keys, and multi-worker
   deployments with per-worker (in-memory) budgets.
@@ -41,8 +43,6 @@ The `main`/`prod` branch is the only supported version.
 
 **Known limitations**
 
-- Prompt injection via ingested documents or web results is mitigated (node
-  gates, grading) but not eliminated. Only ingest corpora you trust.
 - The PII/PHI filter is regex-based. It is tuned to avoid corrupting legitimate
   technical text, which means it is not a compliance control on its own — see
   [docs/PRIVACY_COMPLIANCE.md](docs/PRIVACY_COMPLIANCE.md).

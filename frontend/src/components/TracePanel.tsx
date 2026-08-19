@@ -10,16 +10,42 @@ export function TracePanel({ trace }: TracePanelProps) {
   const citations = trace.citations ?? []
   const hasCitations = citations.length > 0
   const hasSources = trace.sources.length > 0
+  const hasConsensus = trace.consensus_score != null
 
-  if (!hasRoute && !hasSteps && !hasSources && !hasCitations) return null
+  if (!hasRoute && !hasSteps && !hasSources && !hasCitations && !hasConsensus) return null
 
   return (
     <details className="trace">
       <summary>
         <span>Agent trace</span>
-        <span className="latency">{Math.round(trace.latency_ms)} ms</span>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {trace.tenant_id && trace.tenant_id !== 'default' && (
+            <span className="trace-chip" style={{ fontSize: '0.75rem' }}>Tenant: {trace.tenant_id}</span>
+          )}
+          {hasConsensus && (
+            <span
+              className="trace-chip"
+              style={{
+                fontSize: '0.75rem',
+                backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                color: '#22c55e',
+                border: '1px solid rgba(34, 197, 94, 0.3)',
+              }}
+            >
+              Consensus: {Math.round((trace.consensus_score || 0) * 100)}%
+            </span>
+          )}
+          <span className="latency">{Math.round(trace.latency_ms)} ms</span>
+        </div>
       </summary>
       <div className="trace-body">
+        {hasConsensus && trace.critique_summary && (
+          <div>
+            <span className="trace-chip">Adversarial Critique Summary</span>
+            <p className="trace-meta" style={{ marginTop: '0.2rem' }}>{trace.critique_summary}</p>
+          </div>
+        )}
+
         {hasRoute && (
           <div>
             <span className="trace-chip">Route · {trace.route}</span>

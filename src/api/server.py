@@ -24,7 +24,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from enum import Enum
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -162,6 +162,7 @@ class AgentMode(str, Enum):
     multi_hop = "multi_hop"
     tools = "tools"
     agentic = "agentic"
+    consensus = "consensus"
 
 
 class ChatTurnIn(BaseModel):
@@ -188,6 +189,15 @@ class QueryRequest(BaseModel):
         max_length=20,
         description="Prior turns from the client (used when Supabase is unavailable)",
     )
+    tenant_id: str | None = Field(
+        default="default",
+        max_length=64,
+        description="Tenant identifier for multi-tenant data isolation",
+    )
+    user_roles: list[str] = Field(
+        default_factory=lambda: ["public"],
+        description="Caller's authorized access groups/roles for RBAC document filtering",
+    )
 
 
 class CitationOut(BaseModel):
@@ -212,6 +222,9 @@ class QueryResponse(BaseModel):
     follow_ups: list[str] = []
     latency_ms: float = 0.0
     session_id: str | None = None
+    tenant_id: str | None = None
+    consensus_score: float | None = None
+    critique_summary: str | None = None
     error_code: str | None = None
 
 
@@ -251,6 +264,7 @@ async def _run_agent_with_timeout(
     mode: str,
     chat_history: list[dict[str, str]] | None = None,
     use_memory: bool = True,
+    rbac_context: Any | None = None,
 ):
     """Run sync agent in thread pool with timeout.
 
@@ -265,6 +279,7 @@ async def _run_agent_with_timeout(
             mode,
             chat_history=chat_history,
             use_memory=use_memory,
+            rbac_context=rbac_context,
         ),
         timeout=settings.request_timeout_seconds,
     )
@@ -392,6 +407,12 @@ async def query(
     status = "ok"
     start = time.time()
     try:
+        from src.schemas import RBACContext
+
+        rbac = RBACContext(
+            tenant_id=request.tenant_id or "default",
+            user_roles=request.user_roles or ["public"],
+        )
         chat_history, session_id = await _resolve_chat_history(
             request.session_id,
             request.use_memory,
@@ -403,6 +424,7 @@ async def query(
                 request.mode.value,
                 chat_history=chat_history,
                 use_memory=_memory_active(request.use_memory),
+                rbac_context=rbac,
             )
         elapsed = (time.time() - start) * 1000
 
@@ -414,8 +436,9 @@ async def query(
         )
 
         logger.info(
-            "Query processed | mode=%s | latency=%.0fms | history_turns=%d | request_id=%s",
+            "Query processed | mode=%s | tenant=%s | latency=%.0fms | history_turns=%d | request_id=%s",
             request.mode.value,
+            rbac.tenant_id,
             elapsed,
             len(chat_history or []),
             get_request_id(),
@@ -433,6 +456,9 @@ async def query(
             follow_ups=result.follow_ups,
             latency_ms=elapsed,
             session_id=session_id,
+            tenant_id=result.tenant_id or rbac.tenant_id,
+            consensus_score=getattr(result, "consensus_score", None),
+            critique_summary=getattr(result, "critique_summary", None),
             error_code=result.error_code,
         )
         if idempotency_key:
@@ -476,6 +502,12 @@ async def query_stream(
     """SSE stream of agent steps + answer tokens as they are produced."""
 
     async def event_generator():
+        from src.schemas import RBACContext
+
+        rbac = RBACContext(
+            tenant_id=request.tenant_id or "default",
+            user_roles=request.user_roles or ["public"],
+        )
         start = time.time()
         chat_history, session_id = await _resolve_chat_history(
             request.session_id,
@@ -500,6 +532,7 @@ async def query_stream(
                     chat_history=chat_history,
                     use_memory=use_memory,
                     cancelled=cancelled,
+                    rbac_context=rbac,
                 ):
                     loop.call_soon_threadsafe(event_queue.put_nowait, event)
             except Exception:
@@ -602,6 +635,91 @@ async def query_stream(
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: Asynchronous Ingestion Job Endpoints
+# ---------------------------------------------------------------------------
+
+
+class IngestJobRequest(BaseModel):
+    source_paths: list[str] = Field(
+        ...,
+        min_length=1,
+        description="List of file paths or directories to ingest into the vector store",
+    )
+    tenant_id: str = Field(
+        default="default",
+        description="Tenant identifier for multi-tenant data isolation",
+    )
+    access_groups: list[str] = Field(
+        default_factory=lambda: ["public"],
+        description="Authorized user access groups for document RBAC",
+    )
+    webhook_url: str | None = Field(
+        default=None,
+        description="Optional HTTP(S) URL to receive a POST webhook notification upon job completion",
+    )
+
+
+class IngestJobResponse(BaseModel):
+    job_id: str
+    status: str
+    source_paths: list[str] = []
+    tenant_id: str = "default"
+    access_groups: list[str] = []
+    progress_pct: float
+    total_files: int
+    processed_files: int
+    total_chunks: int
+    error: str | None = None
+    webhook_url: str | None = None
+    created_at: float
+    completed_at: float | None = None
+
+
+@app.post("/ingest/jobs", response_model=IngestJobResponse, status_code=202)
+async def submit_ingest_job(
+    request: IngestJobRequest,
+    _auth: None = Depends(verify_api_key),
+) -> IngestJobResponse:
+    """Submit a document ingestion job to the asynchronous background worker queue."""
+    from src.ingestion.queue import get_ingestion_queue
+
+    queue = get_ingestion_queue()
+    job = queue.submit_job(
+        source_paths=request.source_paths,
+        tenant_id=request.tenant_id,
+        access_groups=request.access_groups,
+        webhook_url=request.webhook_url,
+    )
+    return IngestJobResponse(**job.to_dict())
+
+
+@app.get("/ingest/jobs/{job_id}", response_model=IngestJobResponse)
+async def get_ingest_job(
+    job_id: str,
+    _auth: None = Depends(verify_api_key),
+) -> IngestJobResponse:
+    """Poll progress and completion status of an ingestion job."""
+    from src.ingestion.queue import get_ingestion_queue
+
+    job = get_ingestion_queue().get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Ingestion job '{job_id}' not found")
+    return IngestJobResponse(**job.to_dict())
+
+
+@app.get("/ingest/jobs", response_model=list[IngestJobResponse])
+async def list_ingest_jobs(
+    limit: int = 50,
+    _auth: None = Depends(verify_api_key),
+) -> list[IngestJobResponse]:
+    """List recent ingestion jobs."""
+    from src.ingestion.queue import get_ingestion_queue
+
+    jobs = get_ingestion_queue().list_jobs(limit=min(100, max(1, limit)))
+    return [IngestJobResponse(**j.to_dict()) for j in jobs]
 
 
 if __name__ == "__main__":

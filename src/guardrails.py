@@ -117,7 +117,32 @@ class InputGuardrails:
                     )
                 )
 
-        return len(violations) == 0, violations
+        # Check prompt injection and jailbreak attacks
+        if settings.injection_guardrails_enabled and settings.injection_guardrails_mode != "off":
+            from src.security.injection import InjectionDetector
+            from src.api.metrics import record_injection_attempt
+
+            scan_result = InjectionDetector.scan_input(question)
+            if not scan_result.is_safe:
+                severity_level = (
+                    "error" if settings.injection_guardrails_mode == "block" else "warning"
+                )
+                for finding in scan_result.findings:
+                    try:
+                        record_injection_attempt("input", finding.injection_type.value)
+                    except Exception:
+                        pass
+                    violations.append(
+                        GuardrailViolation(
+                            rule=finding.injection_type.value,
+                            message=finding.message,
+                            severity=severity_level,
+                            value=finding.matched_pattern,
+                            limit="N/A",
+                        )
+                    )
+
+        return len([v for v in violations if v.severity == "error"]) == 0, violations
 
 
 class OutputGuardrails:
@@ -194,6 +219,33 @@ class OutputGuardrails:
                     limit=1,
                 )
             )
+
+        # Check for system prompt leakage and markdown image data exfiltration in output
+        if settings.injection_guardrails_enabled and settings.prompt_leakage_detection_enabled:
+            from src.security.injection import InjectionDetector
+            from src.api.metrics import record_injection_attempt
+
+            out_scan = InjectionDetector.scan_output(answer)
+            if not out_scan.is_safe:
+                for finding in out_scan.findings:
+                    try:
+                        record_injection_attempt("output", finding.injection_type.value)
+                    except Exception:
+                        pass
+                    # Exfiltration or severe leaks are errors; others are warnings
+                    is_error = finding.matched_pattern in (
+                        "markdown_image_exfil",
+                        "generic_suspicious_image_exfil",
+                    )
+                    violations.append(
+                        GuardrailViolation(
+                            rule=finding.injection_type.value,
+                            message=finding.message,
+                            severity="error" if is_error else "warning",
+                            value=finding.matched_pattern,
+                            limit="N/A",
+                        )
+                    )
 
         return len([v for v in violations if v.severity == "error"]) == 0, violations
 

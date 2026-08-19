@@ -10,7 +10,7 @@ import threading
 from typing import Any
 
 from src.config import settings
-from src.schemas import AgentResponse, Citation
+from src.schemas import AgentResponse, Citation, RBACContext
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +29,17 @@ def normalize_question(question: str) -> str:
     return _WS_RE.sub(" ", (question or "").strip()).lower()
 
 
-def build_cache_key(question: str, mode: str) -> str:
-    digest = hashlib.sha256(normalize_question(question).encode("utf-8")).hexdigest()
-    return f"{_CACHE_PREFIX}:{mode}:{digest}"
+def build_cache_key(
+    question: str,
+    mode: str,
+    rbac_context: RBACContext | None = None,
+) -> str:
+    ctx = rbac_context or RBACContext()
+    tenant = (ctx.tenant_id or "default").strip().lower()
+    roles = ctx.roles_key()
+    norm_q = normalize_question(question)
+    digest = hashlib.sha256(f"{norm_q}:{tenant}:{roles}".encode()).hexdigest()
+    return f"{_CACHE_PREFIX}:{mode}:{tenant}:{digest}"
 
 
 def should_use_cache(
@@ -192,76 +200,107 @@ def _deserialize(raw: str) -> AgentResponse:
     )
 
 
-def get_cached_response(question: str, mode: str) -> AgentResponse | None:
-    """Return a cached AgentResponse or None on miss / error."""
+def get_cached_response(
+    question: str,
+    mode: str,
+    rbac_context: RBACContext | None = None,
+) -> AgentResponse | None:
+    """Return a cached AgentResponse (exact or semantic) or None on miss / error."""
+    ctx = rbac_context or RBACContext()
     client = _get_client()
-    if client is None:
-        return None
-    key = build_cache_key(question, mode)
-    try:
-        raw = client.get(key)
-    except Exception:
-        logger.warning("Redis GET failed for %s", key, exc_info=True)
-        return None
-    if not raw:
-        return None
-    try:
-        result = _deserialize(raw)
-    except Exception:
-        logger.warning("Corrupt cache entry for %s — ignoring", key, exc_info=True)
-        return None
-    steps = list(result.steps or [])
-    if "cache_hit" not in steps:
-        steps = ["cache_hit", *steps]
-    result.steps = steps
-    logger.info("Cache hit | mode=%s | key=%s", mode, key)
-    try:
-        from src.api.metrics import record_cache_hit
 
-        record_cache_hit()
-    except Exception:
-        pass
-    return result
+    # 1. Try exact Redis cache hit
+    if client is not None:
+        key = build_cache_key(question, mode, ctx)
+        try:
+            raw = client.get(key)
+            if raw:
+                result = _deserialize(raw)
+                steps = list(result.steps or [])
+                if "cache_hit" not in steps:
+                    steps = ["cache_hit", *steps]
+                result.steps = steps
+                result.tenant_id = ctx.tenant_id
+                logger.info("Exact cache hit | mode=%s | key=%s", mode, key)
+                try:
+                    from src.api.metrics import record_cache_hit
+
+                    record_cache_hit()
+                except Exception:
+                    pass
+                return result
+        except Exception:
+            logger.warning("Redis GET failed for %s", key, exc_info=True)
+
+    # 2. Try vector-based semantic cache hit
+    if settings.cache_enabled and settings.semantic_cache_enabled:
+        from src.cache.semantic_cache import get_semantic_cache
+
+        sem_hit = get_semantic_cache().lookup(question, mode, ctx)
+        if sem_hit is not None:
+            return sem_hit
+
+    return None
 
 
-def set_cached_response(question: str, mode: str, response: AgentResponse) -> bool:
-    """Store a successful response. Returns True if written."""
-    client = _get_client()
-    if client is None:
+def set_cached_response(
+    question: str,
+    mode: str,
+    response: AgentResponse,
+    rbac_context: RBACContext | None = None,
+) -> bool:
+    """Store a successful response in exact and semantic cache. Returns True if written."""
+    if not settings.cache_enabled:
         return False
     if getattr(response, "error_code", None):
         return False
     if not response.answer or not response.answer.strip():
         return False
-    key = build_cache_key(question, mode)
-    ttl = max(1, int(settings.cache_ttl_seconds))
-    to_store = AgentResponse(
-        answer=response.answer,
-        mode=response.mode,
-        sources=list(response.sources or []),
-        citations=list(response.citations or []),
-        context_docs=[],
-        route=response.route,
-        route_reason=response.route_reason,
-        grade_summary=response.grade_summary,
-        sub_queries=response.sub_queries,
-        decomposition_reason=response.decomposition_reason,
-        steps=[s for s in (response.steps or []) if s != "cache_hit"],
-        follow_ups=list(response.follow_ups or []),
-    )
-    try:
-        client.setex(key, ttl, _serialize(to_store))
-        logger.debug("Cache set | mode=%s | ttl=%ds | key=%s", mode, ttl, key)
-        try:
-            from src.api.metrics import record_cache_miss_write
 
-            record_cache_miss_write()
+    ctx = rbac_context or RBACContext()
+    written = False
+
+    # 1. Store in exact Redis cache if client available
+    client = _get_client()
+    if client is not None:
+        key = build_cache_key(question, mode, ctx)
+        ttl = max(1, int(settings.cache_ttl_seconds))
+        to_store = AgentResponse(
+            answer=response.answer,
+            mode=response.mode,
+            sources=list(response.sources or []),
+            citations=list(response.citations or []),
+            context_docs=[],
+            route=response.route,
+            route_reason=response.route_reason,
+            grade_summary=response.grade_summary,
+            sub_queries=response.sub_queries,
+            decomposition_reason=response.decomposition_reason,
+            steps=[s for s in (response.steps or []) if not s.startswith("cache_hit") and not s.startswith("semantic_cache_hit")],
+            follow_ups=list(response.follow_ups or []),
+            tenant_id=ctx.tenant_id,
+        )
+        try:
+            client.setex(key, ttl, _serialize(to_store))
+            logger.debug("Exact cache set | mode=%s | ttl=%ds | key=%s", mode, ttl, key)
+            try:
+                from src.api.metrics import record_cache_miss_write
+
+                record_cache_miss_write()
+            except Exception:
+                pass
+            written = True
         except Exception:
-            pass
-        return True
-    except Exception:
-        logger.warning("Redis SET failed for %s", key, exc_info=True)
-        return False
+            logger.warning("Redis SET failed for %s", key, exc_info=True)
+
+    # 2. Store in semantic cache
+    if settings.semantic_cache_enabled:
+        from src.cache.semantic_cache import get_semantic_cache
+
+        sem_written = get_semantic_cache().store(question, mode, response, ctx)
+        written = written or sem_written
+
+    return written
 
 
 # ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ from langchain_core.vectorstores import VectorStoreRetriever
 from src.config import settings
 from src.ingestion.ingest import get_vector_store
 from src.retrieval.reranker import rerank_documents
+from src.schemas import RBACContext
 
 logger = logging.getLogger(__name__)
 
@@ -119,27 +120,50 @@ def _rrf_fuse(ranked_lists: list[list[Document]], rrf_k: int) -> list[Document]:
     return fused
 
 
-def _dense_retrieve(query: str, candidate_k: int, search_type: str) -> list[Document]:
+def _filter_rbac(docs: list[Document], rbac_context: RBACContext | None) -> list[Document]:
+    """Filter candidate documents based on tenant and role access permissions."""
+    if not docs or rbac_context is None:
+        return docs
+    filtered: list[Document] = []
+    for doc in docs:
+        t_id = doc.metadata.get("tenant_id")
+        a_groups = doc.metadata.get("access_groups") or doc.metadata.get("allowed_roles")
+        c_level = doc.metadata.get("classification")
+        if rbac_context.is_authorized(t_id, a_groups, c_level):
+            filtered.append(doc)
+    return filtered
+
+
+def _dense_retrieve(
+    query: str,
+    candidate_k: int,
+    search_type: str,
+    rbac_context: RBACContext | None = None,
+) -> list[Document]:
     store = get_vector_store()
+    # Over-fetch if RBAC is active so post-filtering still yields sufficient candidates
+    fetch_k = candidate_k * 2 if rbac_context is not None else candidate_k
+
     if search_type == "mmr":
         docs = store.max_marginal_relevance_search(
             query,
-            k=candidate_k,
-            fetch_k=max(candidate_k, settings.retrieval_candidate_k),
+            k=fetch_k,
+            fetch_k=max(fetch_k, settings.retrieval_candidate_k),
             lambda_mult=settings.retrieval_mmr_lambda,
         )
-        return docs
+        return _filter_rbac(docs, rbac_context)[:candidate_k]
 
     try:
-        pairs = store.similarity_search_with_relevance_scores(query, k=candidate_k)
+        pairs = store.similarity_search_with_relevance_scores(query, k=fetch_k)
         docs: list[Document] = []
         for doc, score in pairs:
             meta = dict(doc.metadata)
             meta["score"] = float(score)
             docs.append(Document(page_content=doc.page_content, metadata=meta))
-        return docs
+        return _filter_rbac(docs, rbac_context)[:candidate_k]
     except Exception:
-        return store.similarity_search(query, k=candidate_k)
+        docs = store.similarity_search(query, k=fetch_k)
+        return _filter_rbac(docs, rbac_context)[:candidate_k]
 
 
 def _log_retrieval(query: str, docs: list[Document], mode: str) -> None:
@@ -161,15 +185,22 @@ def _log_retrieval(query: str, docs: list[Document], mode: str) -> None:
     )
 
 
-def retrieve(query: str, top_k: int | None = None) -> list[Document]:
+def retrieve(
+    query: str,
+    top_k: int | None = None,
+    rbac_context: RBACContext | None = None,
+) -> list[Document]:
     """Retrieve → (optional) rerank → top_k, optionally expanding to parent sections.
 
     Pipeline:
-      1. Over-fetch ``candidate_k`` via hybrid / MMR / similarity
+      1. Over-fetch ``candidate_k`` via hybrid / MMR / similarity with RBAC filtering
       2. Cross-encoder rerank (FlashRank) when ``RERANK_ENABLED``
       3. Keep ``top_k`` (or a larger pool when parent-expanding)
       4. Optional parent-section expansion
     """
+    from src.schemas import RBACContext
+
+    ctx = rbac_context or RBACContext()
     final_k = top_k or settings.retrieval_top_k
     candidate_k = max(final_k, settings.retrieval_candidate_k)
     mode = (settings.retrieval_search_type or "similarity").lower()
@@ -178,18 +209,19 @@ def retrieve(query: str, top_k: int | None = None) -> list[Document]:
     pool_k = max(final_k * 3, final_k) if settings.expand_to_parent else final_k
 
     if mode == "hybrid":
-        dense_docs = _dense_retrieve(query, candidate_k, "similarity")
+        dense_docs = _dense_retrieve(query, candidate_k, "similarity", ctx)
         bm25 = _get_bm25_retriever(candidate_k)
         sparse_docs = bm25.invoke(query) if bm25 is not None else []
+        sparse_docs = _filter_rbac(sparse_docs, ctx)
         candidates = _rrf_fuse([dense_docs, sparse_docs], settings.retrieval_rrf_k)[
             :candidate_k
         ]
         mode_label = "hybrid"
     elif mode == "mmr":
-        candidates = _dense_retrieve(query, candidate_k, "mmr")
+        candidates = _dense_retrieve(query, candidate_k, "mmr", ctx)
         mode_label = "mmr"
     else:
-        candidates = _dense_retrieve(query, candidate_k, "similarity")
+        candidates = _dense_retrieve(query, candidate_k, "similarity", ctx)
         mode_label = "similarity"
 
     if settings.rerank_enabled:
@@ -202,6 +234,7 @@ def retrieve(query: str, top_k: int | None = None) -> list[Document]:
         from src.ingestion.parent_store import expand_children_to_parents
 
         expanded = expand_children_to_parents(docs)[:final_k]
+        expanded = _filter_rbac(expanded, ctx)
         _log_retrieval(query, expanded, f"{mode_label}+parent")
         return expanded
 
@@ -210,8 +243,19 @@ def retrieve(query: str, top_k: int | None = None) -> list[Document]:
     return docs
 
 
-def format_docs(docs: list[Document]) -> str:
-    """Format retrieved documents for prompt context (section + page when present)."""
+def format_docs(docs: list[Document], query: str | None = None) -> str:
+    """Format retrieved documents for prompt context (section + page + multimodal tags)."""
+    if not docs:
+        return ""
+
+    if query and settings.context_compression_enabled:
+        try:
+            from src.retrieval.compression import compress_documents
+
+            docs = compress_documents(query, docs)
+        except Exception:
+            logger.debug("Context compression failed in format_docs", exc_info=True)
+
     parts = []
     for i, doc in enumerate(docs, 1):
         source = doc.metadata.get("source", "unknown")
@@ -221,8 +265,11 @@ def format_docs(docs: list[Document]) -> str:
         section_bit = f", section={section}" if section else ""
         chunk_id = doc.metadata.get("chunk_id") or doc.metadata.get("id")
         id_bit = f" ({chunk_id})" if chunk_id else ""
+        chunk_type = doc.metadata.get("chunk_type")
+        type_bit = f" [{chunk_type.upper()}]" if chunk_type in ("table", "figure") else ""
+
         parts.append(
-            f"[{i}] Source: {source}{page_bit}{section_bit}{id_bit}\n{doc.page_content}"
+            f"[{i}] Source: {source}{page_bit}{section_bit}{type_bit}{id_bit}\n{doc.page_content}"
         )
     return "\n\n---\n\n".join(parts)
 

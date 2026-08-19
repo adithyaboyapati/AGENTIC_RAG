@@ -37,6 +37,27 @@ CAPACITY_REJECTIONS = Counter(
     "rag_capacity_rejections_total",
     "Requests rejected because all concurrency slots were busy (503)",
 )
+INJECTION_ATTEMPTS = Counter(
+    "rag_injection_attempts_total",
+    "Total prompt injection and jailbreak attempts detected",
+    ["direction", "pattern_type"],
+)
+# Ingestion pipeline metrics
+INGEST_JOBS_TOTAL = Counter(
+    "rag_ingest_jobs_total",
+    "Total asynchronous document ingestion jobs processed",
+    ["status"],
+)
+INGEST_CHUNKS_TOTAL = Counter(
+    "rag_ingest_chunks_total",
+    "Total document chunks ingested into vector store",
+)
+INGEST_DURATION_SECONDS = Histogram(
+    "rag_ingest_duration_seconds",
+    "Wall-clock duration of document ingestion jobs in seconds",
+    buckets=(1.0, 5.0, 10.0, 30.0, 60.0, 120.0, 300.0, 600.0),
+)
+
 # Cost is a first-class operational concern here, so it belongs in the scrape
 # output — not only in the logs.
 TOKENS = Counter(
@@ -81,6 +102,14 @@ def record_capacity_rejection() -> None:
     CAPACITY_REJECTIONS.inc()
 
 
+def record_injection_attempt(direction: str, pattern_type: str) -> None:
+    """Export detected prompt injection or jailbreak attempt."""
+    INJECTION_ATTEMPTS.labels(
+        direction=direction or "unknown",
+        pattern_type=pattern_type or "unknown",
+    ).inc()
+
+
 def record_token_usage(
     provider: str,
     prompt_tokens: int,
@@ -95,6 +124,20 @@ def record_token_usage(
         TOKENS.labels(provider=label, direction="output").inc(completion_tokens)
     if cost_usd > 0:
         COST_USD.labels(provider=label).inc(cost_usd)
+
+
+def record_ingest_job(status: str) -> None:
+    INGEST_JOBS_TOTAL.labels(status=status or "unknown").inc()
+
+
+def record_ingest_chunks(count: int) -> None:
+    if count > 0:
+        INGEST_CHUNKS_TOTAL.inc(count)
+
+
+def record_ingest_duration(duration_s: float) -> None:
+    if duration_s >= 0.0:
+        INGEST_DURATION_SECONDS.observe(duration_s)
 
 
 def metrics_payload() -> tuple[bytes, str]:

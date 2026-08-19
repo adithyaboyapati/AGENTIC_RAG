@@ -418,4 +418,46 @@ def chunk_documents(
         child_chunk_size=child_chunk_size,
         child_chunk_overlap=child_chunk_overlap,
     )
+
+    # Multimodal Extraction (Structured Tables & Figures)
+    multimodal_docs: list[Document] = []
+    if pdf_path is not None and pdf_path.exists():
+        try:
+            doc = fitz.open(pdf_path)
+            source_name = pdf_path.name
+            for p_idx in range(doc.page_count):
+                page = doc[p_idx]
+                if settings.multimodal_tables_enabled:
+                    from src.ingestion.tables import extract_tables_from_page
+
+                    tables = extract_tables_from_page(page, p_idx, source_name=source_name)
+                    for tbl in tables:
+                        tbl_doc = tbl.to_document(source=source_name)
+                        tbl_doc.metadata["chunk_id"] = tbl.table_id
+                        tbl_doc.metadata["parent_id"] = tbl.table_id
+                        tbl_doc.metadata["doc_type"] = "child"
+                        multimodal_docs.append(tbl_doc)
+
+                if settings.multimodal_figures_enabled:
+                    from src.ingestion.multimodal import extract_figures_from_page
+
+                    figures = extract_figures_from_page(page, p_idx, source_name=source_name)
+                    for fig in figures:
+                        fig_doc = fig.to_document(source=source_name)
+                        fig_doc.metadata["chunk_id"] = fig.figure_id
+                        fig_doc.metadata["parent_id"] = fig.figure_id
+                        fig_doc.metadata["doc_type"] = "child"
+                        multimodal_docs.append(fig_doc)
+            doc.close()
+        except Exception:
+            logger.debug("Multimodal extraction skipped for %s", pdf_path, exc_info=True)
+
+    if multimodal_docs:
+        logger.info(
+            "Extracted %d multimodal chunks (tables & figures) from %s",
+            len(multimodal_docs),
+            pdf_path.name if pdf_path else "",
+        )
+        children.extend(multimodal_docs)
+
     return children, parents

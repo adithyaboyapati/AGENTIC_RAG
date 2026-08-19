@@ -47,13 +47,15 @@ npm run lint     # oxlint
 ## Features
 
 ### Core
-- **Seven agent modes** with descriptions and example prompts
+- **Eight agent modes** (Baseline, Router, CRAG, Decompose, Multi-Hop, Tools, Agentic, Consensus Debate) with descriptions and example prompts
 - **Markdown chat** (GFM via `react-markdown`)
 - **True SSE streaming** via `POST /query/stream` — live agent steps as nodes finish, answer tokens as they generate
 
-### Quality & Attribution
+### Quality, Attribution & Security
+- **Multi-Agent Consensus Score** and Adversarial Critique badges
+- **Multi-Tenant RBAC** support with isolated document access
 - **Detailed source citations** — chunk ID, page, section, snippet, relevance score
-- **Expandable agent traces** — route decision, grading, retrieval steps, latency
+- **Expandable agent traces** — route decision, grading, retrieval steps, latency, tenant info
 - **Three grounded follow-up questions** — generated from retrieved sources
 
 ### Memory & Persistence

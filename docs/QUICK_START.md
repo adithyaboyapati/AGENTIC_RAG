@@ -1,6 +1,6 @@
 # Quick Start Guide — Agentic RAG
 
-Get up and running with the complete 7-mode Agentic RAG system in 5 minutes.
+Get up and running with the complete multi-mode Agentic RAG system in 5 minutes.
 
 ---
 
@@ -75,6 +75,7 @@ python -m src.cli ask "What is Self-RAG?" --mode crag -v
 #  - multi_hop: Sequential retrieval with reflection
 #  - tools: Tool-augmented agent (retrieve, web, calculator)
 #  - agentic: Unified orchestrator (picks best strategy)
+#  - consensus: Multi-agent debate (Proposer + Critic + Consensus Judge)
 ```
 
 ### Option D: REST API

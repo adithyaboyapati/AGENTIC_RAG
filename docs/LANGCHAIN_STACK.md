@@ -19,10 +19,14 @@ and [PRODUCTION.md](PRODUCTION.md).
 | `src/agents/multi_hop.py` | `analyze_chain`, `reflect_chain` — sequential hops (Phase 5) |
 | `src/agents/orchestrator.py` | `choose_strategy` — analyzes question for best pattern (Phase 7) |
 | `src/agents/followups.py` | `followup_chain` — generates 3 grounded follow-up questions post-answer |
-| `src/retrieval/retriever.py` | Hybrid/MMR/similarity over-fetch → rerank → top_k → optional parent expand |
+| `src/retrieval/retriever.py` | Hybrid/MMR/similarity over-fetch → rerank → top_k → optional parent expand + RBAC filters |
+| `src/retrieval/compression.py` | Dynamic query-informed sentence-level token pruning and context compression |
 | `src/retrieval/reranker.py` | Cross-encoder rerank: NVIDIA NeMo Retriever API or local FlashRank (`RERANK_PROVIDER`); circuit-breaker wrapped |
 | `src/retrieval/citations.py` | Citation/snippet extraction: `docs_to_citations()`, `build_response()` for rich UI/eval payloads |
 | `src/tools/all_tools.py` | `@tool`-decorated `retrieve_docs`, `web_search`, `calculator` (AST-restricted, no `eval()`) |
+| `src/ingestion/tables.py` | PyMuPDF structured table detector and Markdown matrix converter |
+| `src/ingestion/multimodal.py` | Visual figure and embedded diagram extractor |
+| `src/ingestion/queue.py` | Async background ingestion worker queue with progress tracking & HMAC webhooks |
 | `src/ingestion/ingest.py` | Document loaders, Chroma (persistent or HTTP); owns embeddings + vector store singletons; orchestrates chunking/cleansing |
 | `src/ingestion/chunking.py` | Section-parent-child chunking (TOC/regex parents → recursive child splits); fallback to fixed-size |
 | `src/ingestion/cleanse.py` | PDF text cleansing: headers/footers, page numbers, boilerplate, hyphenation, irrelevant sections |
@@ -39,6 +43,7 @@ and [PRODUCTION.md](PRODUCTION.md).
 | `src/graph/multi_hop_graph.py` | Phase 5 — sequential retrieval loop with reflection |
 | `src/graph/tools_graph.py` | Phase 6 — tool-calling agent (`llm.bind_tools()`) |
 | `src/graph/agent_graph.py` | Phase 7 — full orchestrator; reuses the phase graphs above as sub-nodes |
+| `src/graph/consensus_graph.py` | Phase 15 — multi-agent adversarial debate (Proposer + Critic + Judge) |
 
 ## Schemas & Response Building
 

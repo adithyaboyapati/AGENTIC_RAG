@@ -6,6 +6,7 @@ export type AgentMode =
   | 'multi_hop'
   | 'tools'
   | 'agentic'
+  | 'consensus'
 
 export interface ModeMeta {
   id: AgentMode
@@ -37,6 +38,26 @@ export interface QueryResponse {
   follow_ups: string[]
   latency_ms: number
   session_id: string | null
+  tenant_id?: string | null
+  consensus_score?: number | null
+  critique_summary?: string | null
+  error_code?: string | null
+}
+
+export interface IngestJob {
+  job_id: string
+  status: 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled'
+  source_paths: string[]
+  tenant_id: string
+  access_groups: string[]
+  progress_pct: number
+  total_files: number
+  processed_files: number
+  total_chunks: number
+  error?: string | null
+  webhook_url?: string | null
+  created_at: number
+  completed_at?: number | null
 }
 
 export interface ChatMessage {

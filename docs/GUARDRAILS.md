@@ -29,14 +29,17 @@ They live in two layers:
 Every call to `run_agent()` executes guardrails in this order, **before** the LLM is ever
 invoked for the user's actual question:
 
-1. **Privacy check on input** — block if PII is present (see [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md))
-2. **Input guardrails** — length, word count, credential-pattern detection
-3. **Query-rate check** — process-wide queries/minute budget
-4. **Token-budget check** — process-wide tokens/minute and tokens/hour budget
-5. Dispatch to the selected mode, **tracking actual token usage** via LangChain's OpenAI callback
-6. **Output guardrails** — length, presence of sources, citation extraction
-7. **Privacy check on output** — redact or block PII/PHI per policy
-8. (Optional) **Quality guardrails** — validate answer quality per configurable thresholds
+1. **Prompt Injection & Jailbreak Defense** — scans user input for direct jailbreak/injection patterns, system override attempts, delimiter hijacking, and base64/hex obfuscation (`src/security/injection.py`).
+2. **Privacy check on input** — block if PII is present (see [PRIVACY_COMPLIANCE.md](PRIVACY_COMPLIANCE.md)).
+3. **Input guardrails** — length, word count, credential-pattern detection (`src/guardrails.py`).
+4. **Query-rate check** — process-wide queries/minute budget.
+5. **Token-budget check** — process-wide tokens/minute and tokens/hour budget.
+6. **Multi-Tenant Document RBAC** — filters retrieved documents by tenant ID and authorized user access groups.
+7. Dispatch to the selected mode (with Node-Level Output Gates and Circuit Breakers), **tracking actual token usage** via LangChain's OpenAI callback.
+8. **Output guardrails** — length, presence of sources, citation extraction.
+9. **Prompt Leakage & Indirect Injection Output Scan** — verifies no system prompt leakage or markdown image exfiltration.
+10. **Privacy check on output** — redact or block PII/PHI per policy.
+11. (Optional) **Quality guardrails** — validate answer quality per configurable thresholds.
 
 Steps 2–4 raise `ValueError` (guardrail violation) or `RateLimitError` (rate/budget
 exceeded, mapped to HTTP 429 by the API layer). Callers should catch both:
@@ -100,11 +103,36 @@ InputGuardrails.validate("my key is sk-abcdefghijklmnop1234567890")
 ❌ max_length: Question too long (maximum 3000 characters)
 ❌ max_words: Question too many words (maximum 500)
 ❌ blocked_keyword: Question appears to contain a credential (openai_key) — remove it
+❌ instruction_override: Instruction override attempt detected (ignore_previous_instructions)
+❌ jailbreak: Jailbreak or persona bypass attempt detected (dan_persona)
 ```
 
 ---
 
-## 2. Output Guardrails
+## 2. Jailbreak & Prompt Injection Defense
+
+**What It Protects Against** (`src/security/injection.py::InjectionDetector`):
+- **Direct Instruction Overrides**: "Ignore all previous instructions...", "Disregard prior directives...", "[SYSTEM OVERRIDE]", role resetting.
+- **Jailbreak Personas & Modes**: DAN (Do Anything Now), AIM, STAN, Developer Mode, unrestricted persona simulations, ethical constraint removal.
+- **System Prompt Extraction**: Requests asking the LLM to dump, repeat verbatim, or leak system prompts/internal instructions.
+- **Adversarial Framing & Obfuscation**: Base64/Hex/ROT13 encoding, zero-width space evasion, unicode homoglyph normalization.
+- **Indirect Prompt Injection**: Poisoned context inside retrieved documents, web search results, or tool outputs (quarantined via `src/resilience/node_gate.py`).
+- **Markdown Data Exfiltration**: Malicious markdown images trying to leak user data or tokens to external collector servers.
+
+### False-Positive Resistance
+The engine distinguishes between attacks and legitimate educational or security inquiries. Questions like *"What is a prompt injection attack?"* or *"Explain how DAN jailbreaks work"* pass without false positives.
+
+### Configuration (`.env`)
+```bash
+INJECTION_GUARDRAILS_ENABLED=true     # Enable prompt injection and jailbreak scanning
+INJECTION_GUARDRAILS_MODE=block       # block | warn | off
+INDIRECT_INJECTION_PROTECTION_ENABLED=true # Scan retrieved docs and web snippets
+PROMPT_LEAKAGE_DETECTION_ENABLED=true # Scan LLM output for system prompt leaks and exfil
+```
+
+---
+
+## 3. Output Guardrails
 
 **What They Check** (`src/guardrails.py::OutputGuardrails`):
 - Answer length (10–10,000 characters)

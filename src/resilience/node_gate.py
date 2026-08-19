@@ -96,13 +96,62 @@ def check_tool_result(tool_name: str, result: str | None) -> GateResult:
     if "tool not found" in lower or text.startswith("Tool ") and "not found" in lower:
         return GateResult.quarantine("tool_missing", f"Unknown tool {name}")
 
+    # Check for indirect prompt injection in tool outputs
+    injection_gate = check_indirect_injection(text, name)
+    if not injection_gate.ok:
+        return injection_gate
+
     return GateResult.pass_(message=f"{name} ok")
 
 
+def check_indirect_injection(content: str | None, context_name: str = "context") -> GateResult:
+    """Check text (retrieved doc, web search, tool result) for indirect prompt injection."""
+    text = (content or "").strip()
+    if not text:
+        return GateResult.pass_(message="empty context")
+
+    try:
+        from src.config import settings
+
+        if not settings.injection_guardrails_enabled or not settings.indirect_injection_protection_enabled:
+            return GateResult.pass_(message="indirect injection checks disabled")
+
+        from src.security.injection import InjectionDetector
+        from src.api.metrics import record_injection_attempt
+
+        scan = InjectionDetector.scan_context(text)
+        if not scan.is_safe:
+            for finding in scan.findings:
+                try:
+                    record_injection_attempt("indirect", finding.injection_type.value)
+                except Exception:
+                    pass
+            logger.warning(
+                "Indirect injection detected in %s | type=%s | pattern=%s",
+                context_name,
+                scan.findings[0].injection_type.value,
+                scan.findings[0].matched_pattern,
+            )
+            return GateResult.quarantine(
+                "indirect_injection",
+                f"Quarantined {context_name}: detected indirect prompt injection ({scan.findings[0].matched_pattern})",
+            )
+    except Exception:
+        logger.debug("Indirect injection check skipped", exc_info=True)
+
+    return GateResult.pass_(message=f"{context_name} injection check passed")
+
+
 def check_documents(docs: Iterable[Any] | None, *, required: bool = False) -> GateResult:
-    """Structural check on a document list (not semantic relevance)."""
+    """Structural check on a document list (not semantic relevance) with indirect injection gating."""
     items = list(docs or [])
     if items:
+        # Check if any document contains an indirect injection
+        for i, doc in enumerate(items):
+            content = getattr(doc, "page_content", str(doc))
+            gate = check_indirect_injection(content, f"document[{i}]")
+            if not gate.ok:
+                return gate
         return GateResult.pass_(message=f"{len(items)} documents")
     if required:
         return GateResult.abort("docs_required", "No documents available when evidence was required")

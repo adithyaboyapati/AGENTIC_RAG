@@ -68,6 +68,8 @@ export interface QueryParams {
   sessionId?: string | null
   useMemory?: boolean
   chatHistory?: ChatTurnPayload[]
+  tenantId?: string
+  userRoles?: string[]
   signal?: AbortSignal
 }
 
@@ -82,6 +84,8 @@ export async function queryAgent(params: QueryParams): Promise<QueryResponse> {
       session_id: params.sessionId || undefined,
       use_memory: params.useMemory ?? true,
       chat_history: params.chatHistory?.length ? params.chatHistory : undefined,
+      tenant_id: params.tenantId || 'default',
+      user_roles: params.userRoles || ['public'],
     }),
   })
 
@@ -121,6 +125,8 @@ export async function streamQuery(
       session_id: params.sessionId || undefined,
       use_memory: params.useMemory ?? true,
       chat_history: params.chatHistory?.length ? params.chatHistory : undefined,
+      tenant_id: params.tenantId || 'default',
+      user_roles: params.userRoles || ['public'],
     }),
   })
 
@@ -191,4 +197,44 @@ export async function streamQuery(
   if (errorMessage) {
     throw new ApiError(errorMessage, 500)
   }
+}
+
+// ---------------------------------------------------------------------------
+// Ingestion API Client Functions
+// ---------------------------------------------------------------------------
+
+export async function submitIngestJob(
+  sourcePaths: string[],
+  tenantId = 'default',
+  accessGroups = ['public'],
+  webhookUrl?: string,
+): Promise<any> {
+  const res = await fetch(`${API_BASE}/ingest/jobs`, {
+    method: 'POST',
+    headers: headers(),
+    body: JSON.stringify({
+      source_paths: sourcePaths,
+      tenant_id: tenantId,
+      access_groups: accessGroups,
+      webhook_url: webhookUrl,
+    }),
+  })
+  if (!res.ok) throw new ApiError(await parseError(res), res.status)
+  return res.json()
+}
+
+export async function getIngestJob(jobId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/ingest/jobs/${jobId}`, {
+    headers: headers(),
+  })
+  if (!res.ok) throw new ApiError(await parseError(res), res.status)
+  return res.json()
+}
+
+export async function listIngestJobs(limit = 50): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/ingest/jobs?limit=${limit}`, {
+    headers: headers(),
+  })
+  if (!res.ok) throw new ApiError(await parseError(res), res.status)
+  return res.json()
 }

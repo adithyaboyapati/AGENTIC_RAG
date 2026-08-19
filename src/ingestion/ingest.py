@@ -153,6 +153,8 @@ def ingest(
     child_chunk_overlap: int | None = None,
     strategy: str | None = None,
     reset: bool = False,
+    tenant_id: str = "default",
+    access_groups: list[str] | None = None,
 ) -> int:
     """Load PDFs, chunk (section parent–child by default), embed, upsert.
 
@@ -183,6 +185,15 @@ def ingest(
             chunk_size=chunk_size,
             chunk_overlap=chunk_overlap,
         )
+        # Tag tenant and RBAC metadata
+        groups_str = ",".join(access_groups or ["public"])
+        for c in children:
+            c.metadata["tenant_id"] = tenant_id or "default"
+            c.metadata["access_groups"] = groups_str
+        for p in parents:
+            p.metadata["tenant_id"] = tenant_id or "default"
+            p.metadata["access_groups"] = groups_str
+
         all_children.extend(children)
         all_parents.extend(parents)
         print(
@@ -235,6 +246,64 @@ def ingest(
         f"({len(all_parents)} parent sections, strategy={strategy})"
     )
     return len(all_children)
+
+
+def ingest_documents(
+    source_path: Path | str,
+    tenant_id: str = "default",
+    access_groups: list[str] | None = None,
+    reset: bool = False,
+) -> int:
+    """Ingest documents from a file or folder with tenant isolation."""
+    p = Path(source_path)
+    if not p.exists():
+        raise FileNotFoundError(f"Path does not exist: {p}")
+
+    if p.is_file():
+        # Single file ingestion
+        loader = PyMuPDFLoader(str(p))
+        pages = loader.load()
+        strategy = settings.chunking_strategy.lower().strip()
+        children, parents = chunk_documents(p, pages, strategy=strategy)
+
+        groups_str = ",".join(access_groups or ["public"])
+        for c in children:
+            c.metadata["tenant_id"] = tenant_id or "default"
+            c.metadata["access_groups"] = groups_str
+        for pr in parents:
+            pr.metadata["tenant_id"] = tenant_id or "default"
+            pr.metadata["access_groups"] = groups_str
+
+        if parents:
+            save_parents(parents, merge=True)
+
+        ids: list[str] = []
+        for chunk in children:
+            cid = chunk_content_id(chunk)
+            chunk.metadata["chunk_id"] = cid
+            for key in list(chunk.metadata.keys()):
+                value = chunk.metadata[key]
+                if isinstance(value, (str, int, float, bool)) or value is None:
+                    if value is None:
+                        del chunk.metadata[key]
+                    continue
+                chunk.metadata[key] = str(value)
+            ids.append(cid)
+
+        store = get_vector_store()
+        try:
+            store.delete(ids=ids)
+        except Exception:
+            pass
+        store.add_documents(children, ids=ids)
+        return len(children)
+
+    return ingest(
+        p,
+        tenant_id=tenant_id,
+        access_groups=access_groups,
+        reset=reset,
+    )
 
 
 def main() -> None:

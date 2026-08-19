@@ -127,7 +127,7 @@ class Settings(BaseSettings):
     max_queries_per_minute: int = 60  # process-wide backstop
     max_queries_per_minute_per_client: int = 20  # per API key / client IP
     max_tokens_per_query: int = 2000
-    max_tokens_per_minute: int = 10000
+    max_tokens_per_minute: int = 30000
     max_tokens_per_hour: int = 100000
     # Pricing defaults for gpt-4o-mini (USD per 1K tokens)
     cost_per_1k_input_usd: float = 0.00015
@@ -168,6 +168,13 @@ class Settings(BaseSettings):
     privacy_detect_phi: bool = False
     privacy_retention_days: int = 30
 
+    # Security — Jailbreak & Prompt Injection Defense
+    # injection_guardrails_mode: block | warn | off
+    injection_guardrails_enabled: bool = True
+    injection_guardrails_mode: str = "block"  # block | warn | off
+    indirect_injection_protection_enabled: bool = True
+    prompt_leakage_detection_enabled: bool = True
+
     # Deprecated pre-PRIVACY_*_MODE flags. Still honoured for one release so
     # existing .env files do not silently change behaviour; see
     # deprecation_warnings, surfaced at startup.
@@ -181,6 +188,29 @@ class Settings(BaseSettings):
     cache_enabled: bool = False
     redis_url: str = "redis://localhost:6379/0"
     cache_ttl_seconds: int = 3600  # 1 hour
+
+    # Phase 10: Vector-Based Semantic Cache & Multi-Tenant RBAC
+    semantic_cache_enabled: bool = True
+    semantic_cache_similarity_threshold: float = 0.94
+    semantic_cache_max_entries: int = 1000
+    rbac_enabled: bool = True
+    default_tenant_id: str = "default"
+
+    # Phase 11: Multimodal Ingestion & Dynamic Context Compression
+    multimodal_tables_enabled: bool = True
+    multimodal_figures_enabled: bool = True
+    context_compression_enabled: bool = True
+    context_compression_ratio: float = 0.65  # Retain top 65% most informative tokens
+
+    # Phase 12: Asynchronous Ingestion Job Queue & Webhooks
+    ingest_max_concurrent_jobs: int = 2
+    ingest_job_retention_seconds: int = 86400  # 24 hours
+    webhook_secret: str = ""
+
+    # Phase 15: Multi-Agent Consensus & Adversarial Debate
+    consensus_agent_enabled: bool = True
+    consensus_max_rounds: int = 1
+    consensus_min_confidence: float = 0.80
 
     # Conversation memory (Supabase + compact prompt packing)
     memory_enabled: bool = True

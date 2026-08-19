@@ -30,6 +30,7 @@ MODE_LABELS = {
     "multi_hop": "Phase 5 — Multi-Hop Retrieval",
     "tools": "Phase 6 — Tool-Augmented Agent",
     "agentic": "Phase 7 — Full Agentic RAG",
+    "consensus": "Phase 15 — Multi-Agent Consensus Debate",
 }
 
 MODE_DESCRIPTIONS = {
@@ -40,6 +41,7 @@ MODE_DESCRIPTIONS = {
     "multi_hop": "Chains sequential retrievals where each hop builds on the last.",
     "tools": "Agent picks tools: retrieve docs, web search, or calculate. Uses function calling.",
     "agentic": "Full orchestrator: analyzes question → picks strategy (decompose/multi-hop/tools/simple) → grades → generates.",
+    "consensus": "Multi-agent adversarial debate: Proposer drafts → Challenger critiques → Consensus Judge arbitrates.",
 }
 
 EXAMPLE_QUESTIONS = {
@@ -50,6 +52,7 @@ EXAMPLE_QUESTIONS = {
     "multi_hop": "What fallback does CRAG use when retrieval fails?",
     "tools": "What is 847 * 293 and what is modular RAG?",
     "agentic": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
+    "consensus": "Compare the performance trade-offs between Naive RAG and Modular RAG",
 }
 
 
@@ -83,6 +86,10 @@ def _dispatch(question: str, mode: str) -> AgentResponse:
         from src.graph.agent_graph import ask_agentic
 
         return ask_agentic(question)
+    if mode == "consensus":
+        from src.graph.consensus_graph import ask_consensus
+
+        return ask_consensus(question)
     raise ValueError(f"Unknown mode: {mode}")
 
 
@@ -146,14 +153,17 @@ def run_agent(
     mode: str,
     chat_history: list[dict[str, str]] | None = None,
     use_memory: bool = True,
+    rbac_context: Any | None = None,
 ) -> AgentResponse:
-    """Dispatch a question to the selected agent mode with guardrails and privacy checks."""
+    """Dispatch a question to the selected agent mode with guardrails, privacy, and RBAC checks."""
     from src.cache.redis_cache import get_cached_response
+    from src.schemas import RBACContext
 
-    pre = _prepare_agent_run(question, mode, chat_history, use_memory)
+    ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
+    pre = _prepare_agent_run(question, mode, chat_history, use_memory, ctx)
 
     if pre.cacheable:
-        cached = get_cached_response(pre.sanitized_question, mode)
+        cached = get_cached_response(pre.sanitized_question, mode, ctx)
         if cached is not None:
             return _apply_post_guardrails(cached)
 
@@ -161,8 +171,9 @@ def run_agent(
 
     result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
     result = _apply_post_guardrails(result)
+    result.tenant_id = ctx.tenant_id
     result = _finalize_agent_result(
-        pre.sanitized_question, result, cacheable=pre.cacheable
+        pre.sanitized_question, result, cacheable=pre.cacheable, rbac_context=ctx
     )
     return result
 
@@ -172,6 +183,7 @@ def _finalize_agent_result(
     result: AgentResponse,
     *,
     cacheable: bool,
+    rbac_context: Any | None = None,
 ) -> AgentResponse:
     """Post-dispatch: quality/follow-ups/cache, with abort-aware handling."""
     from src.cache.redis_cache import set_cached_response
@@ -191,7 +203,7 @@ def _finalize_agent_result(
     result.follow_ups = _attach_follow_ups(question, result)
 
     if cacheable:
-        set_cached_response(question, result.mode, result)
+        set_cached_response(question, result.mode, result, rbac_context=rbac_context)
 
     return result
 
@@ -309,6 +321,7 @@ class _Preflight:
     effective_question: str
     tracker: Any
     cacheable: bool
+    rbac_context: Any = None
 
 
 def _prepare_agent_run(
@@ -316,6 +329,7 @@ def _prepare_agent_run(
     mode: str,
     chat_history: list[dict[str, str]] | None,
     use_memory: bool,
+    rbac_context: Any | None = None,
 ) -> _Preflight:
     """Shared pre-flight for run_agent / stream_agent.
 
@@ -328,7 +342,9 @@ def _prepare_agent_run(
     Raises ValueError on rejection.
     """
     from src.cache.redis_cache import should_use_cache
+    from src.schemas import RBACContext
 
+    ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
     policy = get_privacy_policy()
 
     privacy = PrivacyGuard.apply_input(question, policy)
@@ -366,6 +382,7 @@ def _prepare_agent_run(
         effective_question=effective_question,
         tracker=get_cost_tracker(),
         cacheable=cacheable,
+        rbac_context=ctx,
     )
 
 
@@ -391,6 +408,7 @@ def stream_agent(
     chat_history: list[dict[str, str]] | None = None,
     use_memory: bool = True,
     cancelled: threading.Event | None = None,
+    rbac_context: Any | None = None,
 ) -> Iterator[dict[str, Any]]:
     """Yield progressive SSE-ready events: step / token / answer / follow_ups / sources / done / error.
 
@@ -402,10 +420,13 @@ def stream_agent(
     event boundary and unwinds the run instead of billing to completion.
     """
     from src.cache.redis_cache import get_cached_response
+    from src.schemas import RBACContext
     from src.streaming import CancelledRun, use_emitter
 
+    ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
+
     try:
-        pre = _prepare_agent_run(question, mode, chat_history, use_memory)
+        pre = _prepare_agent_run(question, mode, chat_history, use_memory, ctx)
     except ValueError as exc:
         yield {"type": "error", "message": str(exc)}
         return
@@ -415,7 +436,7 @@ def stream_agent(
     effective_question = pre.effective_question
 
     if cacheable:
-        cached = get_cached_response(pre.sanitized_question, mode)
+        cached = get_cached_response(pre.sanitized_question, mode, ctx)
         if cached is not None:
             result = _apply_post_guardrails(cached)
             for step in result.steps or []:
@@ -450,8 +471,9 @@ def stream_agent(
             with use_emitter(emit):
                 result = _run_with_cost_tracking(effective_question, mode, tracker)
             result = _apply_post_guardrails(result)
+            result.tenant_id = ctx.tenant_id
             result = _finalize_agent_result(
-                pre.sanitized_question, result, cacheable=cacheable
+                pre.sanitized_question, result, cacheable=cacheable, rbac_context=ctx
             )
 
             # Steps/tokens were already emitted during the run; send final payload

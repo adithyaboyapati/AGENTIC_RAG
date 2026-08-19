@@ -267,6 +267,29 @@ data: {"type": "sources", "content": ["rag.pdf#p2"], "citations": […]}
 data: {"type": "done", "latency_ms": 4200, "session_id": "…", "mode": "agentic"}
 ```
 
+### Asynchronous Document Ingestion Queue & Webhooks
+
+For background document ingestion of heavy PDF batches without HTTP timeouts:
+
+```bash
+# Submit Ingestion Job (HTTP 202 Accepted)
+curl -X POST http://localhost:8000/ingest/jobs \
+  -H "X-API-Key: your-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "source_paths": ["data/sample_docs/rag.pdf"],
+    "tenant_id": "enterprise_corp",
+    "access_groups": ["research", "admin"],
+    "webhook_url": "https://api.yourdomain.com/webhooks/ingest"
+  }'
+
+# Poll Job Status & Progress
+curl -X GET http://localhost:8000/ingest/jobs/{job_id} \
+  -H "X-API-Key: your-key"
+```
+
+Webhooks dispatch `POST` requests signed with `X-Hub-Signature-256: sha256=...` HMAC authentication using `WEBHOOK_SECRET`.
+
 ## Security Checklist (Non-Negotiable)
 
 **Enforced by the code** — `src/api/server.py::_validate_production_config` refuses to

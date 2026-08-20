@@ -316,7 +316,7 @@ start when `ENVIRONMENT=production` and any of these is wrong:
 - [ ] TLS terminates in front of the stack, and the HSTS header in `frontend/nginx.conf` is uncommented
 - [ ] `TRUSTED_HOSTS` set, and `TRUST_PROXY_HEADERS=true` **only** when a proxy you control rewrites `X-Forwarded-For` (otherwise clients can spoof their rate-limit identity)
 - [ ] `docs/supabase_schema.sql` applied if memory is enabled — it turns on RLS and installs the retention sweep
-- [ ] Load test run against a staging copy (`locust -f tests/load/locustfile.py`) to confirm the limits behave under saturation
+- [ ] Load test run against a staging copy (`pip install -r requirements-load.txt && locust -f tests/load/locustfile.py`) to confirm the limits behave under saturation
 
 ## Production Checklist
 
@@ -561,6 +561,7 @@ size replicas so `total_replicas × MAX_CONCURRENT_QUERIES` stays under it. Veri
 load test before trusting the numbers:
 
 ```bash
+pip install -r requirements-load.txt
 locust -f tests/load/locustfile.py --host http://staging:8000 --headless -u 50 -r 10 -t 5m
 ```
 

@@ -60,6 +60,7 @@ Every mode inherits guardrails, privacy, caching, and cost tracking from
 ## Load testing
 
 ```bash
+pip install -r requirements-load.txt
 locust -f tests/load/locustfile.py --host http://localhost:8000
 ```
 

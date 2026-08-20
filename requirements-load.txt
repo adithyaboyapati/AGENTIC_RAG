@@ -1,0 +1,4 @@
+# Optional load-testing extras. Not installed by CI.
+# locust 2.42.1 is the last release that still supports Python 3.10;
+# newer Locust requires 3.11+ and would also need a pytest pin change.
+locust==2.42.1

@@ -12,5 +12,6 @@ pytest-timeout==2.5.0
 # Security scanning
 pip-audit==2.9.0
 
-# Load testing (see tests/load/locustfile.py)
-locust==2.42.1
+# Locust is not installed here. 2.42.1 is the last release that supports
+# Python 3.10 and it requires pytest<9, which conflicts with pytest==9.1.1.
+# Load tests: pip install -r requirements-load.txt

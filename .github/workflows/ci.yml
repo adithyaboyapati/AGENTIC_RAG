@@ -93,8 +93,21 @@ jobs:
       - name: Install pip-audit
         run: pip install "$(grep -E '^pip-audit==' requirements-dev.txt)"
 
+      # Unfixed on PyPI — drop an ID when a patched release exists, then bump
+      # the pin instead of ignoring:
+      #   PYSEC-2026-311  chromadb 1.5.9 (latest) HTTP API RCE if the server
+      #                   is exposed with trust_remote_code; default here is
+      #                   embedded PersistentClient
+      #   PYSEC-2026-3046 ragas 0.4.3 (latest) SSRF in unused multimodal
+      #                   collections helpers
+      #   PYSEC-2026-2447 diskcache 5.6.3 (latest, transitive) pickle RCE
+      #                   given write access to the cache directory
       - name: Audit Python dependencies for known CVEs
-        run: pip-audit -r requirements.txt --strict
+        run: >
+          pip-audit -r requirements.txt --strict
+          --ignore-vuln PYSEC-2026-311
+          --ignore-vuln PYSEC-2026-3046
+          --ignore-vuln PYSEC-2026-2447
 
       - name: Scan git history for secrets
         uses: gitleaks/gitleaks-action@v2
@@ -161,7 +174,9 @@ jobs:
           echo "OK: no compiler in runtime image"
 
       - name: Scan image for OS/library vulnerabilities
-        uses: aquasecurity/trivy-action@0.28.0
+        # Pin the commit, not a floating tag: trivy-action tags were
+        # force-pushed in a 2026 supply-chain incident. v0.36.0.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
         with:
           image-ref: agentic-rag:ci
           format: table

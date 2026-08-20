@@ -2,13 +2,15 @@
 # Update deliberately: bump a pin, run the test suite, then commit.
 
 # Core LangChain stack
-langchain==1.3.2
+# langchain 1.3.9 is the PYSEC-2026-2192 floor (path traversal in loaders).
+# langgraph >=1.2.4 is required by that langchain pin.
+langchain==1.3.9
 langchain-core==1.4.8
 langchain-text-splitters==1.1.2
 langchain-openai==1.2.1
 langchain-groq==1.1.3
 langchain-community==0.4.2
-langgraph==1.2.2
+langgraph==1.2.4
 langchain-chroma==1.1.0
 
 # Vector store

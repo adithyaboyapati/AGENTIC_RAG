@@ -49,7 +49,7 @@ jobs:
           MIN_MRR: ${{ inputs.min_mrr || '0.50' }}
         run: python -m src.evaluation.retrieval_metrics --gate
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: retrieval-report

@@ -106,9 +106,16 @@ def _apply_post_guardrails(result: AgentResponse) -> AgentResponse:
         sources=result.sources or [],
     )
     if not valid:
+        error_msgs = [v.message for v in violations if v.severity == "error"]
         for v in violations:
             if v.severity == "error":
                 logger.warning("Output guardrail: %s", v.message)
+        if error_msgs:
+            raise ValueError(
+                "Response blocked: output failed safety checks ("
+                + "; ".join(error_msgs)
+                + ")"
+            )
 
     outcome = PrivacyGuard.apply_output(result.answer, policy)
     if outcome.findings:
@@ -130,10 +137,14 @@ def _apply_post_guardrails(result: AgentResponse) -> AgentResponse:
     return result
 
 
-def _maybe_quality_check(question: str, result: AgentResponse) -> None:
-    """Optionally run LLM-as-judge quality guardrails (extra cost; off by default)."""
+def _maybe_quality_check(question: str, result: AgentResponse) -> bool:
+    """Optionally run LLM-as-judge quality guardrails (extra cost; off by default).
+
+    Returns False when an error-severity quality check failed so the caller can
+    skip caching an ungrounded answer. Never fails the user-facing request.
+    """
     if not settings.quality_guardrails_enabled or not result.context_docs:
-        return
+        return True
     try:
         from src.evaluation.metrics import evaluate_metrics
         from src.guardrails import QualityGuardrails
@@ -148,8 +159,19 @@ def _maybe_quality_check(question: str, result: AgentResponse) -> None:
         if not ok:
             for v in violations:
                 logger.warning("Quality guardrail: %s", v.message)
+            errors = [v for v in violations if v.severity == "error"]
+            if errors:
+                note = errors[0].message
+                if note not in (result.answer or ""):
+                    result.answer = (
+                        f"{(result.answer or '').rstrip()}\n\n"
+                        f"_Note: {note}. Treat remaining claims as incompletely grounded._"
+                    )
+                return False
+        return True
     except Exception:
         logger.warning("Quality guardrail check failed", exc_info=True)
+        return True
 
 
 def run_agent(
@@ -203,10 +225,10 @@ def _finalize_agent_result(
         result.follow_ups = []
         return result
 
-    _maybe_quality_check(question, result)
+    quality_ok = _maybe_quality_check(question, result)
     result.follow_ups = _attach_follow_ups(question, result)
 
-    if cacheable:
+    if cacheable and quality_ok is not False:
         set_cached_response(question, result.mode, result, rbac_context=rbac_context)
 
     return result

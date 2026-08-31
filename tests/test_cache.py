@@ -186,7 +186,7 @@ def test_runner_skips_cache_when_memory_history(monkeypatch):
     expected = AgentResponse(answer="Fresh", mode="baseline", sources=["s"])
     monkeypatch.setattr("src.runner._run_with_cost_tracking", lambda *a, **k: expected)
     monkeypatch.setattr("src.runner._attach_follow_ups", lambda *a, **k: [])
-    monkeypatch.setattr("src.runner._maybe_quality_check", lambda *a, **k: None)
+    monkeypatch.setattr("src.runner._maybe_quality_check", lambda *a, **k: True)
 
     from src.runner import run_agent
 

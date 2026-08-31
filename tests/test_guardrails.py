@@ -1,6 +1,6 @@
 """Tests for input/output guardrails and rate limiting."""
 
-from src.guardrails import CostGuardrails, InputGuardrails, OutputGuardrails
+from src.guardrails import CostGuardrails, InputGuardrails, OutputGuardrails, QualityGuardrails
 
 
 def test_input_rejects_too_short():
@@ -79,3 +79,19 @@ def test_token_budget_blocks_when_exhausted():
         assert any(v.rule == "tokens_per_minute" for v in violations)
     finally:
         settings.max_tokens_per_minute = original
+
+
+def test_quality_faithfulness_is_error_severity():
+    ok, violations = QualityGuardrails.validate(
+        faithfulness=0.2, relevance=1.0, context_precision=1.0
+    )
+    assert not ok
+    faith = next(v for v in violations if v.rule == "low_faithfulness")
+    assert faith.severity == "error"
+
+
+def test_output_error_severity_fails_validation():
+    """Warnings (no sources) do not fail; error-severity findings do."""
+    valid, violations = OutputGuardrails.validate("Short answer here.", sources=[])
+    assert valid
+    assert any(v.rule == "no_sources" for v in violations)

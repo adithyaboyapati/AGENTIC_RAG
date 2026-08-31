@@ -23,7 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from src.agents.router import RouteType, router_chain
 from src.chains.generation import direct_chain, rag_chain, web_search_chain
 from src.retrieval.citations import build_response, docs_to_context, docs_to_sources
-from src.retrieval.retriever import format_docs, retrieve
+from src.retrieval.retriever import EMPTY_RETRIEVAL_MESSAGE, format_docs, retrieve
 from src.schemas import AgentResponse, Citation
 from src.streaming import run_graph_streaming, stream_text
 from src.tools.web_search import web_search
@@ -73,7 +73,13 @@ def retrieve_node(state: RouterState) -> dict:
 
 def generate_node(state: RouterState) -> dict:
     """Node: LangChain rag_chain generates from retrieved context."""
-    context = format_docs(state["documents"])
+    docs = state.get("documents") or []
+    if not docs:
+        return {
+            "answer": EMPTY_RETRIEVAL_MESSAGE,
+            "steps": ["No documents retrieved — skipped generation"],
+        }
+    context = format_docs(docs)
     answer = stream_text(
         rag_chain, {"context": context, "question": state["question"]}
     )

@@ -2,10 +2,10 @@
 
 > **Document Type**: Master Technical Architecture & Runtime Execution Reference  
 > **Repository**: `Agentic_RAG`  
-> **Last reviewed against source**: 2026-08-19  
+> **Last reviewed against source**: 2026-09-01  
 > **Core Frameworks**: LangChain Core/Community, LangGraph, FastAPI, ChromaDB, OpenAI, Groq, NVIDIA NeMo Reranker, Redis, React + Vite, Prometheus, Grafana.  
 > **Supported Operational Modes**: `baseline` (Phase 1), `router` (Phase 2), `crag` (Phase 3), `decompose` (Phase 4), `multi_hop` (Phase 5), `tools` (Phase 6), `agentic` (Phase 7), `consensus` (Phase 8).  
-> **Cross-cutting phases**: Phase 8 production API, Phase 8.5 hardening, Phase 9 streaming/cache/metrics, Phase 10 semantic cache & RBAC, Phase 11 multimodal & compression, Phase 12 async ingest & webhooks.
+> **Cross-cutting phases**: Phase 8 production API, Phase 8.5 hardening, Phase 9 streaming/cache/metrics, Phase 10 semantic cache & RBAC, Phase 11 multimodal & compression, Phase 12 async ingest & webhooks, Phase 13 multi-source retrieval (SQLite, sample API, MCP).
 
 ---
 
@@ -67,7 +67,7 @@ This system elevates retrieval from a static pipeline to a set of **agent-callab
 - **Self-Correction & Reflection (CRAG)**: An LLM grades each chunk with a 0–1 score. Chunks below `GRADER_RELEVANCE_THRESHOLD` (default 0.5) are dropped; empty pools trigger rewrite (up to `MAX_RETRIEVAL_RETRIES`) then web fallback.
 - **Query Decomposition**: Deconstructs complex inquiries into 1–5 parallel sub-queries (`langgraph.types.Send` map-reduce) and synthesizes the merged context.
 - **Iterative Multi-Hop Reasoning**: Sequential hops capped at `MAX_MULTI_HOP_STEPS` (default 3); each hop query is conditioned on prior findings.
-- **Tool Calling**: Bound tools `retrieve_docs`, `web_search`, `calculator` with node-gate quarantine of `[TOOL_ERROR]` / `[TOOL_EMPTY]` / `[CIRCUIT_OPEN]` results (abort after 3 quarantines).
+- **Tool Calling**: Bound tools `retrieve_docs`, `query_database`, `query_api`, `query_mcp`, `web_search`, `calculator` with node-gate quarantine of `[TOOL_ERROR]` / `[TOOL_EMPTY]` / `[CIRCUIT_OPEN]` results (abort after 3 quarantines).
 - **Dynamic Context Compression**: Sentence-level scoring keeps the top `CONTEXT_COMPRESSION_RATIO` (default 0.65) of sentences — typically 30–50% token savings; markdown tables are never pruned.
 - **Multi-Agent Adversarial Debate**: A 3-agent jury (Proposer $\to$ Challenger Critic $\to$ Consensus Judge) outputs a parsed confidence score (0.0–1.0).
 - **Egress Completeness**: Every successful run attaches citations (chunk id, page, section, snippet, score) and exactly 3 grounded follow-up questions.
@@ -159,6 +159,7 @@ Agentic_RAG/
 ├── .pre-commit-config.yaml        # ruff + local pytest hook
 ├── data/
 │   ├── sample_docs/               # Source document corpora (rag.pdf)
+│   ├── sources/                   # SQLite catalog (knowledge.db created at runtime)
 │   ├── eval/golden_qa.json        # Golden Q&A pairs (CI offline schema gate + nightly retrieval)
 │   ├── chroma_db/                 # Persistent local Chroma (compose uses HTTP server instead)
 │   ├── parent_store.json          # Parent section context store
@@ -172,7 +173,7 @@ Agentic_RAG/
 │   ├── PRIVACY_COMPLIANCE.md      # PII/PHI detection and redaction policy specifications
 │   ├── PRODUCTION.md              # Enterprise deployment, Docker, monitoring, scaling
 │   ├── QUICK_START.md             # 5-minute setup and CLI guide
-│   ├── ROADMAP.md                 # Phase-by-phase implementation history (0–12, 15)
+│   ├── ROADMAP.md                 # Phase-by-phase implementation history (0–13)
 │   ├── BACKEND_END_TO_END_GUIDE.pdf / .html
 │   └── archive/                   # Historical point-in-time build reports
 ├── frontend/                      # React 18 + Vite + TypeScript (primary UI)
@@ -213,7 +214,7 @@ Agentic_RAG/
 │   │   ├── query_rewriter.py      # RewrittenQuery structured output
 │   │   └── router.py              # RouteDecision (direct | retrieve | web_search)
 │   ├── api/
-│   │   ├── health.py              # Chroma, Redis, OpenAI, Groq, NVIDIA, data dir probes
+│   │   ├── health.py              # Chroma, Redis, OpenAI, Groq, NVIDIA, extra sources, data dir probes
 │   │   ├── metrics.py             # Prometheus counters/histograms
 │   │   ├── rate_limit.py          # Sliding-window per API key / IP (Redis or memory)
 │   │   ├── security.py            # Constant-time X-API-Key; metrics/readiness gates
@@ -252,12 +253,18 @@ Agentic_RAG/
 │   │   └── node_gate.py           # Deterministic contract checks (no LLM)
 │   ├── security/injection.py      # scan_input / scan_context / scan_output
 │   ├── retrieval/
-│   │   ├── retriever.py           # Hybrid/MMR/similarity + RRF + RBAC + parent expand
+│   │   ├── retriever.py           # Hybrid/MMR/similarity + RRF + RBAC + parent expand + extra sources
 │   │   ├── reranker.py            # NVIDIA NeMo or local FlashRank
 │   │   ├── compression.py         # Sentence scoring; tables kept intact
 │   │   └── citations.py           # build_response / docs_to_citations / docs_to_sources
+│   ├── sources/
+│   │   ├── database.py            # SQLite papers / benchmarks / deployments
+│   │   ├── sample_api.py          # FastAPI /kb ops catalog
+│   │   ├── mcp_server.py          # JSON-RPC MCP (HTTP /mcp + stdio)
+│   │   ├── federation.py          # Merge extra hits into retrieve(); documents_for_tool
+│   │   └── seed.py                # Demo catalog records
 │   └── tools/
-│       ├── all_tools.py           # retrieve_docs, web_search, calculator (AST-safe)
+│       ├── all_tools.py           # retrieve_docs, query_database, query_api, query_mcp, web_search, calculator
 │       └── web_search.py          # Re-export of all_tools.web_search
 ├── tests/                         # Pytest suite (see Section 20)
 │   ├── load/locustfile.py         # Load profile: 429/503/504/p95
@@ -283,14 +290,15 @@ Agentic_RAG/
 | `src/security/injection.py` | Jailbreak / injection / exfil scans | Yes (via guardrails + node_gate) | `InjectionDetector.scan_input/context/output` | `re`, `base64` |
 | `src/cache/redis_cache.py` | Exact cache + idempotency; calls semantic cache | Yes if `CACHE_ENABLED` | `get_cached_response()`, `set_idempotent_response()` | `redis` |
 | `src/cache/semantic_cache.py` | Cosine similarity ≥ 0.94 | Yes if cache + semantic flags | `SemanticCache.lookup/store` | OpenAI embeddings |
-| `src/retrieval/retriever.py` | Hybrid + RBAC + parent expand | Yes (Retrieval) | `retrieve()`, `format_docs()`, `_filter_rbac()` | Chroma, BM25, reranker |
+| `src/retrieval/retriever.py` | Hybrid + RBAC + parent expand + extra-source federation | Yes (Retrieval) | `retrieve()`, `format_docs()`, `_attach_extra_sources()` | Chroma, BM25, reranker, `src.sources` |
+| `src/sources/` | SQLite / ops API / lab MCP | Yes if `MULTI_SOURCE_ENABLED` | `search_database`, `search_api`, `search_mcp`, `search_extra_sources` | sqlite3, FastAPI |
 | `src/retrieval/reranker.py` | Cross-encoder rescoring | Yes if `RERANK_ENABLED` | `rerank_documents()` | NVIDIA / FlashRank |
 | `src/retrieval/compression.py` | Sentence pruning (ratio 0.65) | Yes if enabled, via `format_docs` | `compress_documents()`, `_score_sentence()` | `re`, `math` |
 | `src/retrieval/citations.py` | Provenance assembly | Yes (every mode) | `build_response()`, `docs_to_citations()` | `src.schemas` |
 | `src/graph/agent_graph.py` | Full orchestrator | Mode `agentic` | `build_full_agent_graph()`, `ask_agentic()` | subgraphs + grader |
 | `src/graph/consensus_graph.py` | 3-agent debate + abstain/overlap filter | Mode `consensus` | `ask_consensus()` | prompts, retrieve |
 | `src/ingestion/queue.py` | Async ingest + webhooks | Ingest API | `IngestionQueue`, HMAC `sha256=` | `ThreadPoolExecutor` |
-| `src/api/server.py` | HTTP/SSE | Yes (HTTP) | `/query`, `/query/stream`, `/ingest/jobs`, `/health` | FastAPI |
+| `src/api/server.py` | HTTP/SSE | Yes (HTTP) | `/query`, `/query/stream`, `/kb`, `/mcp`, `/ingest/jobs`, `/health` | FastAPI |
 | `src/streaming.py` | Progressive events | SSE path | `use_emitter`, `CancelledRun` | `ContextVar` |
 | `src/resilience/node_gate.py` | Deterministic node contracts | Graphs (crag/tools/agentic) | `check_tool_result`, `check_answer`, `check_route` | injection scanner |
 | `src/llm.py` | LLM factory + Groq fallback | Yes (LLM calls) | `get_llm()`, `get_structured_llm()` | OpenAI, Groq |
@@ -455,7 +463,8 @@ STAGE 5: TOOLS SUBGRAPH + HYBRID RETRIEVAL
 19. `tools_agent_node` binds TOOLS, loops up to 10 iterations:
     LLM emits tool_calls, e.g.:
       a) calculator(expression="25 * 40")  → AST-safe eval → "1000"
-      b) retrieve_docs(query="CRAG vs Self-RAG trade-offs")
+      b) retrieve_docs / query_database / query_api / query_mcp as needed
+         (e.g. query_api("retriever-prod owner"), query_mcp("exp-42"))
     Each result passes `check_tool_result()`. Empty/error/circuit-open → quarantine
     (not used as evidence). 3 quarantines → abort with error_code=node_gate_abort.
 20. `retrieve()` pipeline:
@@ -537,7 +546,7 @@ STAGE 6: CRAG SAFETY NET, GENERATION, EGRESS
 | **Doc Relevance Validation** | Assumes retrieved chunks are relevant | Per-chunk `DocumentGrade` with score ≥ 0.5 threshold | `src/agents/grader.py` |
 | **Recovery from Bad Retrieval** | Hallucinates or fails silently | Rewrite up to `MAX_RETRIEVAL_RETRIES` then web fallback | `src/graph/crag_graph.py` |
 | **Query Complexity Handling** | Single holistic query embedding | Parallel decomposition (`Send` API, 1–5 sub-queries) | `src/graph/decompose_graph.py` |
-| **Tool Capabilities** | Vector database only | Dynamic tool selection (Vector RAG, Web, Safe Math) | `src/tools/all_tools.py` |
+| **Tool Capabilities** | Vector database only | Dynamic tools: PDF retrieve, SQLite catalog, ops API, lab MCP, web, safe math | `src/tools/all_tools.py`, `src/sources/` |
 | **Adversarial Verification** | None | 3-agent debate over retrieved chunks; abstains when evidence is missing | `src/graph/consensus_graph.py` |
 | **Context Window Hygiene** | Stuffs raw chunks verbatim | Dynamic sentence-level query-informed token compression | `src/retrieval/compression.py` |
 | **Caching** | None | Exact Redis + cosine semantic (tenant+role keys); skipped when chat history present | `src/cache/redis_cache.py` |
@@ -897,6 +906,13 @@ User Query
                             │
                             ▼
 ┌────────────────────────────────────────────────────────┐
+│  Extra sources (if MULTI_SOURCE_ENABLED)               │
+│  SQLite FTS + ops catalog API + lab MCP                │
+│  Lexical score gate; prepend matching hits             │
+└───────────────────────────┬────────────────────────────┘
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
 │  Dynamic Context Compression                           │
 │  Sentence-level token pruning against input query      │
 └───────────────────────────┬────────────────────────────┘
@@ -909,7 +925,7 @@ Compression scoring (`_score_sentence`): query-token overlap × 3 + number/entit
 
 Rerank models: NVIDIA `nvidia/llama-nemotron-rerank-vl-1b-v2` (default) or `nv-rerankqa-mistral-4b-v3`; FlashRank `ms-marco-MiniLM-L-12-v2`. NVIDIA calls go through the circuit breaker; on open circuit the hybrid RRF ranking is kept. `RERANK_MAX_LENGTH=512`.
 
-RBAC at retrieve time: `RBACContext.is_authorized` requires tenant match (or doc tenant in `{global, public, *}`) then role overlap, with bypasses for caller role `admin` or doc groups containing `public`/`*`. Graphs today call `retrieve(query)` without the request context (see Stage 5 note).
+RBAC at retrieve time: `RBACContext.is_authorized` requires tenant match (or doc tenant in `{global, public, *}`) then role overlap, with bypasses for caller role `admin` or doc groups containing `public`/`*`. Graphs today call `retrieve(query)` without the request context (see Stage 5 note). Extra-source hits skip the vector store; golden eval calls `retrieve(..., include_extra=False)`.
 
 ---
 
@@ -917,11 +933,14 @@ RBAC at retrieve time: `RBACContext.is_authorized` requires tenant match (or doc
 
 | Tool Name | Source File | Function | Input Schema | Purpose | Security Control |
 |---|---|---|---|---|---|
-| `retrieve_docs` | `src/tools/all_tools.py` | `retrieve_docs(query: str)` | `{"query": str}` | Knowledge-base chunks via `retrieve()` + `format_docs` | Empty → `[TOOL_EMPTY]`; node-gate quarantine |
+| `retrieve_docs` | `src/tools/all_tools.py` | `retrieve_docs(query: str)` | `{"query": str}` | Federated PDF + extra sources via `retrieve()` + `format_docs` | Empty → `[TOOL_EMPTY]`; node-gate quarantine |
+| `query_database` | `src/tools/all_tools.py` | `query_database(query: str)` | `{"query": str}` | SQLite papers / benchmarks / deployments | Empty → `[TOOL_EMPTY]` |
+| `query_api` | `src/tools/all_tools.py` | `query_api(query: str)` | `{"query": str}` | In-process ops catalog (same data as `GET /kb`) | Empty → `[TOOL_EMPTY]` |
+| `query_mcp` | `src/tools/all_tools.py` | `query_mcp(query: str)` | `{"query": str}` | Lab experiments / runbooks / notes | Empty → `[TOOL_EMPTY]` |
 | `web_search` | `src/tools/all_tools.py` (re-exported by `web_search.py`) | `web_search(query: str)` | `{"query": str}` | DuckDuckGo (`DuckDuckGoSearchRun`) | Circuit breaker → `[CIRCUIT_OPEN]`; exceptions → `[TOOL_ERROR]` |
 | `calculator` | `src/tools/all_tools.py` (`safe_calculate`) | `calculator(expression: str)` | `{"expression": str}` | Arithmetic only (`+ - * / // % **`, unary ±) | AST whitelist, no `eval()`, exp cap 1000, len ≤ 200 |
 
-`TOOLS = [retrieve_docs, web_search, calculator]`; `TOOL_MAP` keyed by `.name`. Tools agent max 10 LLM iterations; `MAX_TOOL_FAILURES = 3` quarantines abort the graph.
+`TOOLS = [retrieve_docs, query_database, query_api, query_mcp, web_search, calculator]`; `TOOL_MAP` keyed by `.name`. Tools agent collects Documents from every name in `RETRIEVAL_TOOL_NAMES`. Max 10 LLM iterations; `MAX_TOOL_FAILURES = 3` quarantines abort the graph.
 
 ---
 
@@ -1059,6 +1078,9 @@ All settings load from `.env` via pydantic-settings (`extra="ignore"`). Producti
 | `RETRIEVAL_RRF_K` / `RETRIEVAL_MMR_LAMBDA` | 60 / 0.5 | Fusion / MMR |
 | `RERANK_ENABLED` / `RERANK_PROVIDER` / `RERANK_MODEL` | true / nvidia / llama-nemotron-rerank-vl-1b-v2 | Cross-encoder |
 | `NVIDIA_API_KEY` / `NVIDIA_API_BASE` / `NVIDIA_RERANK_TIMEOUT_SECONDS` | / `https://ai.api.nvidia.com/v1` / 30 | NeMo API |
+| `MULTI_SOURCE_ENABLED` / `EXTRA_SOURCES` | true / `database,api,mcp` | Federate extra retrievers |
+| `KNOWLEDGE_DB_PATH` | `data/sources/knowledge.db` | SQLite catalog |
+| `MULTI_SOURCE_MAX_EXTRA` / `MULTI_SOURCE_MIN_SCORE` | 4 / 0.28 | Extra-hit cap / lexical gate |
 
 ### Agent, security, API, cache
 | Variable | Default | Purpose |
@@ -1113,7 +1135,7 @@ Pytest modules under `tests/` (plus Locust load profile). Counts below are `def 
 
 | File | What it covers |
 |---|---|
-| `test_api.py` | FastAPI `/query`, auth, errors, ingest routes |
+| `test_api.py` | FastAPI `/query`, `/kb`, `/mcp`, auth, errors, ingest routes |
 | `test_cache.py` | Redis exact cache keys, TTL, idempotency helpers |
 | `test_semantic_cache.py` | Cosine lookup, tenant/role isolation |
 | `test_circuit_breaker.py` | Closed/open/half-open transitions |
@@ -1122,7 +1144,8 @@ Pytest modules under `tests/` (plus Locust load profile). Counts below are `def 
 | `test_injection.py` | Jailbreaks, obfuscation, definitional whitelist, context/output scans |
 | `test_privacy.py` | PII/PHI modes, Luhn, labelled IDs |
 | `test_rbac_retrieval.py` | Tenant/role document filtering |
-| `test_retrieval.py` | Hybrid/RRF/format_docs |
+| `test_retrieval.py` | Hybrid/RRF/format_docs (incl. `[DATABASE]` tags) |
+| `test_sources.py` | SQLite FTS, ops catalog, MCP JSON-RPC, federation merge |
 | `test_context_compression.py` | Sentence keep/prune, tables intact |
 | `test_chunking.py` / `test_cleanse.py` | Parent-child + header/footer cleanser |
 | `test_multimodal_ingest.py` | Table/figure Documents |
@@ -1143,18 +1166,21 @@ Also: `python -m src.evaluation.retrieval_metrics --offline` (CI job), nightly i
 
 ---
 
----
-
 # SECTION 23 — HTTP API SURFACE & CONTRACTS
 
-FastAPI app: `src.api.server:app` (`uvicorn src.api.server:app --reload --port 8000`). Lifespan: `setup_logging()`, `init_langsmith_tracing()`, production `_validate_production_config()`.
+FastAPI app: `src.api.server:app` (`uvicorn src.api.server:app --reload --port 8000`). Lifespan: `setup_logging()`, `init_langsmith_tracing()`, production `_validate_production_config()`, `ensure_sources_ready()` (seed SQLite).
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | GET | `/health` | Public | Liveness `{status, service}` |
-| GET | `/health/ready` | API key if `PROTECT_READINESS_ENDPOINT` | Deep probe JSON; 200 if healthy/degraded, 503 if error. Checks Chroma count, Redis ping, OpenAI key, Groq, NVIDIA, data dir |
+| GET | `/health/ready` | API key if `PROTECT_READINESS_ENDPOINT` | Deep probe JSON; 200 if healthy/degraded, 503 if error. Checks Chroma count, Redis ping, OpenAI key, Groq, NVIDIA, extra sources, data dir |
 | GET | `/metrics` | API key if `PROTECT_METRICS_ENDPOINT` | Prometheus text |
 | GET | `/modes` | `verify_api_key` | `MODE_LABELS` map |
+| GET | `/kb/v1/search` | `verify_api_key` | Sample ops catalog search |
+| GET | `/kb/v1/systems/{id}` | `verify_api_key` | Demo service record |
+| GET | `/kb/v1/glossary/{term}` | `verify_api_key` | Demo glossary |
+| GET | `/kb/v1/incidents/{id}` | `verify_api_key` | Demo incident |
+| POST | `/mcp` | `verify_api_key` | JSON-RPC 2.0 MCP (`initialize`, `tools/list`, `tools/call`, `resources/*`) |
 | POST | `/query` | API key + rate limit | Sync `QueryResponse`. Header `Idempotency-Key` optional |
 | POST | `/query/stream` | API key + rate limit | SSE `text/event-stream`; `Cache-Control: no-cache`, `X-Accel-Buffering: no` |
 | POST | `/ingest/jobs` | API key | 202 `IngestJobResponse` |

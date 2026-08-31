@@ -2,9 +2,9 @@
 
 > **Document Type**: Code-Level Reverse Engineering & Runtime State Execution Manual  
 > **Target System**: LangGraph StateGraph implementations in `Agentic_RAG`  
-> **Last reviewed against source**: 2026-08-19  
+> **Last reviewed against source**: 2026-09-01  
 > **Pinned dependency**: `langgraph==1.2.2` (`requirements.txt`) — Pregel runtime.  
-> **Source files**: `src/graph/*.py`, `src/agents/*.py`, `src/tools/all_tools.py`, `src/resilience/node_gate.py`, `src/streaming.py`, `src/runner.py`.  
+> **Source files**: `src/graph/*.py`, `src/agents/*.py`, `src/tools/all_tools.py`, `src/sources/`, `src/resilience/node_gate.py`, `src/streaming.py`, `src/runner.py`.  
 > **Not a graph**: Mode 1 `baseline` (`src/rag/baseline.py`) is a linear LCEL pipeline. Eight **modes**; **seven compiled StateGraphs**.
 
 ---
@@ -92,7 +92,7 @@ Every **agentic mode except baseline** is an autonomous compiled `StateGraph`. D
 2. **`crag`** (`src/graph/crag_graph.py`): Phase 3. `classify` first, then retrieve loop. Rewrite edge is **`rewrite` → `retrieve` → `grade`** (not rewrite→grade). Route `web_search` and exhausted retries both land on node **`web_fallback`**.
 3. **`decompose`** (`src/graph/decompose_graph.py`): Phase 4. `classify` then `Send` map-reduce. `skip_router` lets the parent agentic graph pre-set `route=retrieve`.
 4. **`multi_hop`** (`src/graph/multi_hop_graph.py`): Phase 5. `analyze` → `retrieve_hop` → `reflect` loop. Extra stop: single-hop questions synthesize after hop 1.
-5. **`tools`** (`src/graph/tools_graph.py`): Phase 6. `classify` → `tools_agent` (Python ReAct loop inside **one** node). Abort after 3 quarantines.
+5. **`tools`** (`src/graph/tools_graph.py`): Phase 6. `classify` → `tools_agent` (Python ReAct loop inside **one** node). Bound tools: `retrieve_docs`, `query_database`, `query_api`, `query_mcp`, `web_search`, `calculator`. Abort after 3 quarantines.
 6. **`agentic`** (`src/graph/agent_graph.py`): Phase 7. Router + strategy + **subgraph `.invoke()`** (not `add_node(subgraph)`) + CRAG. Rewrite node **already calls `retrieve()`**, so the loop is **`rewrite` → `grade`**.
 7. **`consensus`** (`src/graph/consensus_graph.py`): Phase 8 DAG. Lazy `get_consensus_graph()`. After `retrieve`, a conditional edge **abstains** when there are no documents. Debate is propose → challenge → adjudicate, then `finalize_judgment` (score parse + lexical overlap). Indirect-injection chunks are dropped at retrieve. No `abort` flag.
 
@@ -253,7 +253,7 @@ No `abort`. `route_condition` returns `state["route"]` directly (must already be
 |---|---|---|---|
 | `skip_router` | `bool` | overwrite | |
 | `messages` | `list[BaseMessage]` | `operator.add` | Classify seeds `HumanMessage`; ReAct loop mutates a local copy |
-| `documents` | `list[Document]` | overwrite | Collected from healthy `retrieve_docs` only |
+| `documents` | `list[Document]` | overwrite | Collected from healthy retrieval tools (`retrieve_docs`, `query_database`, `query_api`, `query_mcp`) |
 | `abort` / `abort_reason` | `bool` / `str` | overwrite | 3 quarantines or empty final answer |
 | `steps` | `list[str]` | `operator.add` | |
 
@@ -410,7 +410,7 @@ Early `if state.get("abort"): return {}` means “no channel updates”. `steps`
 | `web_fallback` | `src/graph/crag_graph.py` | | Shared web node (route=web **and** grade fallback) | `question` | `web_context`, `answer` | `web_search` |
 | `decompose` / `retrieve_sub` / `synthesize` | `src/graph/decompose_graph.py` | | Map-reduce | sub_queries / Send payload | `sub_results`, `answer` | `decompose_chain`, `retrieve`, `synthesis_chain` |
 | `analyze` / `retrieve_hop` / `reflect` / `synthesize` | `src/graph/multi_hop_graph.py` | | Sequential hops | `search_query`, hops | `hop_results`, `sufficient` | `analyze_chain`, `retrieve`, `reflect_chain` |
-| `tools_agent` | `src/graph/tools_graph.py` | `tools_agent_node` | In-node ReAct | `messages` | `messages`, `documents`, `answer`, `abort` | `bind_tools`; `retrieve_docs` calls `retrieve()` directly |
+| `tools_agent` | `src/graph/tools_graph.py` | `tools_agent_node` | In-node ReAct | `messages` | `messages`, `documents`, `answer`, `abort` | `bind_tools`; `RETRIEVAL_TOOL_NAMES` collect Documents via `documents_for_tool` |
 | `retrieve` / `propose` / `challenge` / `adjudicate` / `abstain` | `src/graph/consensus_graph.py` | | Retrieve then debate, or abstain | `context`, `proposal`, `critique` | `proposal`, `critique`, `answer`, `consensus_score` | prompts \| llm; `finalize_judgment` score + overlap filter |
 
 ---
@@ -668,10 +668,11 @@ def tools_agent_node(state: ToolsState) -> dict:
 
         for tool_call in response.tool_calls:
             tool_name, tool_input = tool_call["name"], tool_call["args"]
-            # retrieve_docs is special-cased so Document objects can be collected
-            if tool_name == "retrieve_docs":
-                docs_this_call = retrieve(str(tool_input.get("query", state["question"])))
-                result = format_docs(docs_this_call) if docs_this_call else f"{PREFIX_TOOL_EMPTY} No documents found."
+            # Retrieval tools are special-cased so Document objects can be collected
+            if tool_name in RETRIEVAL_TOOL_NAMES:
+                query = str(tool_input.get("query", state["question"]))
+                docs_this_call = documents_for_tool(tool_name, query)
+                result = format_docs(docs_this_call) if docs_this_call else f"{PREFIX_TOOL_EMPTY} {TOOL_EMPTY_DETAIL.get(tool_name, 'No results.')}"
             elif tool_name in TOOL_MAP:
                 result = TOOL_MAP[tool_name].invoke(tool_input)
             else:
@@ -685,7 +686,7 @@ def tools_agent_node(state: ToolsState) -> dict:
                     return {"abort": True, "abort_reason": "...", "messages": messages, ...}
                 continue  # quarantined result is NOT treated as evidence
 
-            if tool_name == "retrieve_docs":
+            if tool_name in RETRIEVAL_TOOL_NAMES:
                 collected_docs.extend(docs_this_call)
             messages.append(ToolMessage(content=str(result), tool_call_id=tool_call["id"]))
 

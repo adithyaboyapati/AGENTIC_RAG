@@ -77,15 +77,66 @@ def _get_ddg_search():
 @tool
 def retrieve_docs(query: str) -> str:
     """
-    Search the knowledge base for documents about a topic.
+    Search the indexed PDF knowledge base, plus the paper catalog, ops API, and lab MCP when they match.
 
-    Use this to find information from indexed corpus documents.
+    Use this for conceptual RAG questions and as a general first lookup.
+    Prefer query_database / query_api / query_mcp when the question is clearly
+    about citation counts, service owners, incidents, or experiment ids (exp-42).
     """
     from src.retrieval.retriever import format_docs, retrieve
 
     docs = retrieve(query)
     if not docs:
         return f"{PREFIX_TOOL_EMPTY} No documents found."
+    return format_docs(docs)
+
+
+@tool
+def query_database(query: str) -> str:
+    """
+    Look up structured rows in the internal SQLite research catalog.
+
+    Use for paper metadata (authors, year, venue, DOI, citation counts),
+    retrieval benchmark scores (nDCG, recall@k), and deployment cost/latency.
+    """
+    from src.retrieval.retriever import format_docs
+    from src.sources.database import search_database
+
+    docs = search_database(query)
+    if not docs:
+        return f"{PREFIX_TOOL_EMPTY} No database records found."
+    return format_docs(docs)
+
+
+@tool
+def query_api(query: str) -> str:
+    """
+    Search the live operations catalog API (systems, owners, index lag, incidents, glossary).
+
+    Use for who-owns-what, replica counts, SLAs, and recent incidents such as INC-1042.
+    """
+    from src.retrieval.retriever import format_docs
+    from src.sources.sample_api import search_api
+
+    docs = search_api(query)
+    if not docs:
+        return f"{PREFIX_TOOL_EMPTY} No catalog API results found."
+    return format_docs(docs)
+
+
+@tool
+def query_mcp(query: str) -> str:
+    """
+    Query the lab-notes MCP server for unpublished experiments, ablations, and runbooks.
+
+    Use for experiment ids (exp-42, exp-17), chunking studies, and runbooks like rb-bm25.
+    """
+    from src.retrieval.retriever import format_docs
+    from src.sources.mcp_server import search_mcp
+
+    docs = search_mcp(query)
+    if not docs:
+        return f"{PREFIX_TOOL_EMPTY} No MCP lab knowledge found."
     return format_docs(docs)
 
 
@@ -130,5 +181,5 @@ def calculator(expression: str) -> str:
 
 
 # Tool registry for LangGraph
-TOOLS = [retrieve_docs, web_search, calculator]
+TOOLS = [retrieve_docs, query_database, query_api, query_mcp, web_search, calculator]
 TOOL_MAP = {tool.name: tool for tool in TOOLS}

@@ -16,8 +16,9 @@ Available routes:
 1. direct — Greetings, chitchat, or simple questions that need no documents or web search.
    Examples: "Hello", "What is 2+2?", "Thanks for your help"
 
-2. retrieve — Questions that can be answered from the indexed knowledge base corpus
-   (technical concepts, definitions, comparisons, and document-specific details).
+2. retrieve — Questions that can be answered from local knowledge:
+   indexed PDF corpus, the paper/benchmark SQLite catalog, the ops catalog API
+   (owners, incidents, index lag), or lab-notes MCP (experiments and runbooks).
 
 3. web_search — Recent news, current events, live data, or questions clearly outside
    the local corpus (e.g. "Latest AI news today", "Who won the election?").

@@ -212,6 +212,14 @@ class Settings(BaseSettings):
     consensus_max_rounds: int = 1  # reserved; graph is a single propose→challenge→judge pass
     consensus_min_confidence: float = 0.80  # below this, a grounding caveat is appended
 
+    # Multi-source retrieval (PDF vector store + SQLite + sample API + MCP)
+    multi_source_enabled: bool = True
+    # Comma-separated extra sources: database, api, mcp
+    extra_sources: str = "database,api,mcp"
+    knowledge_db_path: str = str(PROJECT_ROOT / "data" / "sources" / "knowledge.db")
+    multi_source_max_extra: int = 4  # extra-source hits prepended to PDF chunks
+    multi_source_min_score: float = 0.28  # lexical overlap gate for extra sources
+
     # Conversation memory (Supabase + compact prompt packing)
     memory_enabled: bool = True
     memory_max_turns: int = 6  # soft bound used when packing history

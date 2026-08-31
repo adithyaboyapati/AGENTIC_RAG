@@ -52,6 +52,8 @@ from src.guardrails import RateLimitError
 from src.logging_config import get_request_id, set_request_id, setup_logging
 from src.observability import init_langsmith_tracing
 from src.runner import MODE_LABELS, run_agent, stream_agent
+from src.sources.mcp_server import mcp_router
+from src.sources.sample_api import router as kb_router
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +120,12 @@ async def lifespan(app: FastAPI):
         settings.privacy_input_mode,
         settings.privacy_output_mode,
     )
+    try:
+        from src.sources.federation import ensure_sources_ready
+
+        ensure_sources_ready()
+    except Exception:
+        logger.warning("Failed to seed extra knowledge sources", exc_info=True)
     yield
 
 
@@ -152,6 +160,9 @@ app.add_middleware(RequestIdMiddleware)
 _trusted = [h.strip() for h in (settings.trusted_hosts or "").split(",") if h.strip()]
 if _trusted:
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=_trusted)
+
+app.include_router(kb_router)
+app.include_router(mcp_router)
 
 
 class AgentMode(str, Enum):

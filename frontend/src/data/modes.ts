@@ -40,8 +40,8 @@ export const MODES: ModeMeta[] = [
     id: 'tools',
     label: 'Tool Agent',
     phase: 'Phase 6',
-    description: 'Picks tools via function calling: retrieve, web search, or calculate.',
-    example: 'What is 847 * 293 and what is modular RAG?',
+    description: 'Picks tools: PDFs, catalog DB, ops API, lab MCP, web search, or calculator.',
+    example: 'Who owns retriever-prod and what did experiment 42 conclude about chunking?',
   },
   {
     id: 'agentic',

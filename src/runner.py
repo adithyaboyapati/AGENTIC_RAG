@@ -39,7 +39,7 @@ MODE_DESCRIPTIONS = {
     "crag": "Grades retrieved docs, rewrites query on failure, falls back to web search.",
     "decompose": "Splits complex questions into sub-queries; retrieves in parallel.",
     "multi_hop": "Chains sequential retrievals where each hop builds on the last.",
-    "tools": "Agent picks tools: retrieve docs, web search, or calculate. Uses function calling.",
+    "tools": "Agent picks tools: retrieve PDFs, query the catalog DB / ops API / lab MCP, web search, or calculate.",
     "agentic": "Full orchestrator: analyzes question → picks strategy (decompose/multi-hop/tools/simple) → grades → generates.",
     "consensus": "Multi-agent debate over retrieved chunks: Proposer → Challenger → Judge. Abstains when the sources cannot support the question.",
 }
@@ -50,7 +50,7 @@ EXAMPLE_QUESTIONS = {
     "crag": "What is Self-RAG?",
     "decompose": "Compare naive RAG, advanced RAG, and modular RAG",
     "multi_hop": "What fallback does CRAG use when retrieval fails?",
-    "tools": "What is 847 * 293 and what is modular RAG?",
+    "tools": "Who owns retriever-prod and what did experiment 42 conclude about chunking?",
     "agentic": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
     "consensus": "Compare the performance trade-offs between Naive RAG and Modular RAG",
 }

@@ -30,8 +30,9 @@ from src.resilience.node_gate import (
     quarantine_tool_message,
 )
 from src.retrieval.citations import build_response, docs_to_sources
-from src.retrieval.retriever import format_docs, retrieve
+from src.retrieval.retriever import format_docs
 from src.schemas import AgentResponse
+from src.sources.federation import RETRIEVAL_TOOL_NAMES, TOOL_EMPTY_DETAIL, documents_for_tool
 from src.streaming import run_graph_streaming, stream_llm_message, stream_text
 from src.tools.all_tools import TOOL_MAP, TOOLS
 from src.tools.web_search import web_search
@@ -192,13 +193,13 @@ def tools_agent_node(state: ToolsState) -> dict:
             )
 
             docs_this_call: list[Document] = []
-            if tool_name == "retrieve_docs":
+            if tool_name in RETRIEVAL_TOOL_NAMES:
                 query = str(tool_input.get("query", state["question"]))
-                docs_this_call = retrieve(query)
+                docs_this_call = documents_for_tool(tool_name, query)
                 result = (
                     format_docs(docs_this_call)
                     if docs_this_call
-                    else f"{PREFIX_TOOL_EMPTY} No documents found."
+                    else f"{PREFIX_TOOL_EMPTY} {TOOL_EMPTY_DETAIL.get(tool_name, 'No results.')}"
                 )
             elif tool_name in TOOL_MAP:
                 tool = TOOL_MAP[tool_name]
@@ -244,7 +245,7 @@ def tools_agent_node(state: ToolsState) -> dict:
                 continue
 
             # Healthy result — only then count web/calc / collect docs
-            if tool_name == "retrieve_docs":
+            if tool_name in RETRIEVAL_TOOL_NAMES:
                 collected_docs.extend(docs_this_call)
             elif tool_name == "web_search":
                 used_web = True

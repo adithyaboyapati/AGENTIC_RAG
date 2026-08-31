@@ -28,6 +28,18 @@ def test_format_docs_includes_page_and_chunk_id():
     assert "Hello RAG" in text
 
 
+def test_format_docs_tags_extra_source_types():
+    docs = [
+        Document(
+            page_content="Citation count: 1842",
+            metadata={"source": "db://papers/crag", "source_type": "database", "chunk_id": "db-1"},
+        )
+    ]
+    text = format_docs(docs)
+    assert "[DATABASE]" in text
+    assert "db://papers/crag" in text
+
+
 def test_docs_to_sources_includes_page_label():
     docs = [
         Document(

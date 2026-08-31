@@ -104,7 +104,7 @@ def score_retrieval(
     """Score one query against expected chunk IDs and/or keywords in content."""
     from src.retrieval.retriever import retrieve
 
-    docs = retrieve(question, top_k=top_k)
+    docs = retrieve(question, top_k=top_k, include_extra=False)
     retrieved_ids = [
         str(doc.metadata.get("chunk_id") or doc.metadata.get("id") or "")
         for doc in docs

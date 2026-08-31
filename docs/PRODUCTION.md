@@ -21,6 +21,8 @@ cp .env.example .env
 #   CACHE_ENABLED=true + REDIS_URL=...      # optional answer cache
 #   RATE_LIMIT_BACKEND=auto                 # auto | redis | memory
 #   QUALITY_GUARDRAILS_ENABLED=false        # enable extra LLM quality checks
+#   MULTI_SOURCE_ENABLED=true               # federate SQLite / ops API / lab MCP
+#   EXTRA_SOURCES=database,api,mcp
 
 # 2. Ingest the knowledge base (one-time, or whenever the corpus changes)
 # For structured PDFs (rag.pdf): uses TOC/heading-aware parent-child chunking
@@ -160,13 +162,14 @@ GET /health/ready
   "checks": {
     "chroma": {"status": "ok", "detail": "136 documents indexed"},
     "openai": {"status": "ok", "detail": "API key configured"},
-    "data_dir": {"status": "ok", "detail": "/data/chroma_db"}
+    "data_dir": {"status": "ok", "detail": "/data/chroma_db"},
+    "extra_sources": {"status": "ok", "detail": "db papers=3; api systems=3; mcp tools=3"}
   }
 }
 ```
 
-Returns 503 when `unhealthy`. Checks the vector store, OpenAI key configuration, and data
-directory.
+Returns 503 when `unhealthy`. Checks the vector store, OpenAI key configuration, data
+directory, Redis (when required), extra sources (SQLite/API/MCP), and optional Groq/NVIDIA.
 
 **Auth-gated by default** (`PROTECT_READINESS_ENDPOINT=true`): the report names the
 Chroma host/port, the indexed document count, and which providers are wired, which is
@@ -176,6 +179,24 @@ logs for specifics.
 
 When no `API_KEY` is configured at all the gate falls open so local probes keep working;
 in production that cannot happen, because startup refuses to run without a key.
+
+### Sample ops catalog & lab MCP (authenticated)
+
+Demo knowledge that is **not** in `rag.pdf`. Same `X-API-Key` gate as `/query` when auth is on.
+
+```bash
+GET /kb/v1/search?q=retriever-prod
+GET /kb/v1/systems/retriever-prod
+GET /kb/v1/glossary/index_lag
+GET /kb/v1/incidents/INC-1042
+
+POST /mcp
+{"jsonrpc":"2.0","id":1,"method":"tools/call",
+ "params":{"name":"get_experiment","arguments":{"id":"exp-42"}}}
+```
+
+stdio MCP (Cursor / Claude Desktop): `python -m src.sources.mcp_server`.
+Disable federation with `MULTI_SOURCE_ENABLED=false`.
 
 ### List Modes (authenticated)
 
@@ -329,6 +350,7 @@ start when `ENVIRONMENT=production` and any of these is wrong:
 - [ ] `RERANK_ENABLED=true` and `RERANK_PROVIDER` set (`nvidia` recommended, or `flashrank` for offline)
 - [ ] When using NVIDIA: `NVIDIA_API_KEY` set and `RERANK_MODEL` matches your keyed model (default `nvidia/llama-nemotron-rerank-vl-1b-v2`)
 - [ ] Knowledge base ingested with `python -m src.ingestion.ingest --source YOUR_DOCS`
+- [ ] Extra sources: `MULTI_SOURCE_ENABLED` and `EXTRA_SOURCES` (SQLite catalog seeds on API startup; `/kb` and `/mcp` are demo knowledge, not live production systems)
 
 ### Agent & Guardrails
 - [ ] `GRADER_RELEVANCE_THRESHOLD` tuned (0.6–0.7 for stricter filtering, 0.3–0.5 for lenient)
@@ -554,7 +576,7 @@ For production scale, in rough order of effort:
 2. **Multiple API workers** — safe with Redis-backed rate limits / cost budgets (`RATE_LIMIT_BACKEND=redis`) and Chroma HTTP (not local SQLite).
 3. **Redis response cache** (above) — cut repeat-query LLM cost/latency; flushed on re-ingest.
 4. **Load balancing** — nginx or a cloud load balancer; set `TRUST_PROXY_HEADERS=true` and `TRUSTED_HOSTS=...` when terminating TLS upstream.
-5. **Auto-scaling** — Kubernetes or ECS, using `/health` for liveness and `/health/ready` for readiness probes (checks Chroma, OpenAI key, Redis, optional Groq/NVIDIA/Supabase). `/health/ready` is auth-gated by default: either give the probe the `X-API-Key` header or set `PROTECT_READINESS_ENDPOINT=false` when the probe cannot send headers and the network already restricts access.
+5. **Auto-scaling** — Kubernetes or ECS, using `/health` for liveness and `/health/ready` for readiness probes (checks Chroma, OpenAI key, Redis, extra sources, optional Groq/NVIDIA/Supabase). `/health/ready` is auth-gated by default: either give the probe the `X-API-Key` header or set `PROTECT_READINESS_ENDPOINT=false` when the probe cannot send headers and the network already restricts access.
 
 Set `MAX_CONCURRENT_QUERIES` per replica against your provider's concurrency limit, and
 size replicas so `total_replicas × MAX_CONCURRENT_QUERIES` stays under it. Verify with a

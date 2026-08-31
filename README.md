@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/LangGraph-orchestrated-purple.svg" alt="LangGraph" />
 </p>
 
-A question hits a **router**, a **strategy picker**, and a **retriever** that can grade, rewrite, and retry. Every answer is cited (chunk, page, section, score) and runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
+A question hits a **router**, a **strategy picker**, and a **retriever** that can grade, rewrite, and retry. Retrieval is not PDF-only: matching hits from a SQLite research catalog, a sample ops API, and a lab MCP server are cited next to the corpus chunks. Every answer runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
 
 ```
 User Question
@@ -49,6 +49,7 @@ Most RAG demos are a single retrieve → generate chain. This repo is a **learni
 |-----------------|--------------|
 | Always retrieve → generate | Agent decides: retrieve 0, 1, or N times |
 | One pass, no retry | CRAG grades chunks, rewrites, falls back to web |
+| One corpus (PDFs) | PDFs plus SQLite catalog, sample ops API, and lab MCP |
 | One query in | Decompose, multi-hop, or tool-calling |
 | One generator | Optional **consensus** debate over the same chunks |
 | Notebook-only | FastAPI + React, Docker Compose, Prometheus |
@@ -66,7 +67,7 @@ Concepts: [docs/CONCEPTS.md](docs/CONCEPTS.md). How each mode was built: [docs/R
 | `crag` | 3 | Grades docs, rewrites on failure, web fallback. |
 | `decompose` | 4 | Splits the question; parallel retrieve (`Send`). |
 | `multi_hop` | 5 | Sequential retrieval; each hop uses the last. |
-| `tools` | 6 | Function calling: retrieve, web search, calculator. |
+| `tools` | 6 | Function calling: PDFs, catalog DB, ops API, lab MCP, web search, calculator. |
 | `agentic` | 7 | Orchestrator: pick a strategy, then CRAG-grade. |
 | `consensus` | 8 | Proposer → Challenger → Judge **on retrieved chunks**. Abstains when the sources cannot support the question. |
 
@@ -118,7 +119,7 @@ pytest -q
 
 ## What else is in the box
 
-**Retrieval** — Hybrid dense + BM25 (RRF) or MMR; NVIDIA or FlashRank rerank; parent-child sections; table/figure chunks; sentence-level context compression.
+**Retrieval** — Hybrid dense + BM25 (RRF) or MMR; NVIDIA or FlashRank rerank; parent-child sections; table/figure chunks; sentence-level context compression. Extra sources (SQLite papers/benchmarks, `/kb` ops catalog, lab MCP) federate into `retrieve()` when they match.
 
 **Safety** — Jailbreak/injection scans (direct + indirect), PII/PHI redact-or-block, AST-only calculator (no `eval()`), production boot that refuses missing keys, short `API_KEY`, or `CORS_ORIGINS=*`.
 
@@ -135,13 +136,15 @@ Full list and deploy notes: [docs/PRODUCTION.md](docs/PRODUCTION.md) · [docs/GU
 ```
 frontend/          React + Vite chat (SSE, citations, traces)
 src/graph/         LangGraph modes (baseline → consensus)
-src/retrieval/     Hybrid retrieve, rerank, compression, citations
+src/retrieval/     Hybrid retrieve, rerank, compression, citations, extra-source merge
+src/sources/       SQLite catalog, sample ops API (`/kb`), lab MCP (`/mcp` + stdio)
 src/ingestion/     Cleanse, parent-child chunk, tables/figures, job queue
-src/api/           FastAPI: /query, /query/stream, /ingest/jobs, /health, /metrics
+src/api/           FastAPI: /query, /query/stream, /kb, /mcp, /ingest/jobs, /health, /metrics
 src/security/      Prompt-injection detector
 src/cache/         Redis exact cache + in-process semantic cache
 monitoring/        Prometheus + Grafana provisioning
 data/sample_docs/  Sample corpus (rag.pdf)
+data/sources/      Seeded SQLite catalog (created at runtime; `*.db` gitignored)
 docs/              Concepts, roadmap, production, guardrails
 ```
 

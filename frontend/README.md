@@ -47,7 +47,7 @@ npm run lint     # oxlint
 ## Features
 
 ### Core
-- **Eight agent modes** (Baseline, Router, CRAG, Decompose, Multi-Hop, Tools, Agentic, Consensus Debate) with descriptions and example prompts
+- **Eight agent modes** (Baseline, Router, CRAG, Decompose, Multi-Hop, Tools, Agentic, Consensus Debate) with descriptions and example prompts — Tools mode can hit the paper catalog, ops API, and lab MCP in addition to PDFs
 - **Markdown chat** (GFM via `react-markdown`)
 - **True SSE streaming** via `POST /query/stream` — live agent steps as nodes finish, answer tokens as they generate
 

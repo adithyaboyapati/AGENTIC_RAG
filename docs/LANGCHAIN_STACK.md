@@ -19,11 +19,12 @@ and [PRODUCTION.md](PRODUCTION.md).
 | `src/agents/multi_hop.py` | `analyze_chain`, `reflect_chain` — sequential hops (Phase 5) |
 | `src/agents/orchestrator.py` | `choose_strategy` — analyzes question for best pattern (Phase 7) |
 | `src/agents/followups.py` | `followup_chain` — generates 3 grounded follow-up questions post-answer |
-| `src/retrieval/retriever.py` | Hybrid/MMR/similarity over-fetch → rerank → top_k → optional parent expand + RBAC filters |
+| `src/retrieval/retriever.py` | Hybrid/MMR/similarity over-fetch → rerank → top_k → optional parent expand + extra-source federation + RBAC filters |
+| `src/sources/` | SQLite research catalog, sample ops API (`/kb`), lab MCP (`POST /mcp` + stdio) |
 | `src/retrieval/compression.py` | Dynamic query-informed sentence-level token pruning and context compression |
 | `src/retrieval/reranker.py` | Cross-encoder rerank: NVIDIA NeMo Retriever API or local FlashRank (`RERANK_PROVIDER`); circuit-breaker wrapped |
 | `src/retrieval/citations.py` | Citation/snippet extraction: `docs_to_citations()`, `build_response()` for rich UI/eval payloads |
-| `src/tools/all_tools.py` | `@tool`-decorated `retrieve_docs`, `web_search`, `calculator` (AST-restricted, no `eval()`) |
+| `src/tools/all_tools.py` | `@tool` `retrieve_docs`, `query_database`, `query_api`, `query_mcp`, `web_search`, `calculator` (AST-restricted, no `eval()`) |
 | `src/ingestion/tables.py` | PyMuPDF structured table detector and Markdown matrix converter |
 | `src/ingestion/multimodal.py` | Visual figure and embedded diagram extractor |
 | `src/ingestion/queue.py` | Async background ingestion worker queue with progress tracking & HMAC webhooks |
@@ -68,11 +69,11 @@ OpenAI or LangChain directly — they gate what reaches/leaves the chains above.
 | `src/config.py` | Settings via pydantic-settings (ingestion, retrieval, LLM/Groq, cache, circuit breakers, API, memory, observability) |
 | `src/cache/redis_cache.py` | Optional answer cache (`CACHE_ENABLED`), idempotency keys, shared Redis client |
 | `src/resilience/circuit_breaker.py` | In-process closed → open → half-open breakers (rerank, web search) |
-| `src/api/server.py` | FastAPI — `/query`, `/query/stream`, `/health`, `/health/ready`, `/modes`, `/metrics` |
+| `src/api/server.py` | FastAPI — `/query`, `/query/stream`, `/kb`, `/mcp`, `/health`, `/health/ready`, `/modes`, `/metrics` |
+| `src/api/health.py` | Liveness/readiness (Chroma, OpenAI key, Redis, extra sources, optional Groq/NVIDIA/Supabase) |
 | `src/api/security.py` | API key auth dependency (constant-time compare, mandatory in production) |
 | `src/api/rate_limit.py` | Per-client sliding-window limiter — Redis when `RATE_LIMIT_BACKEND` is `auto` or `redis`, else memory |
 | `src/api/metrics.py` | Prometheus counters/histograms (requests, latency, cache, LLM fallback, rate limits) |
-| `src/api/health.py` | Liveness/readiness (Chroma, OpenAI key, Redis, optional Groq/NVIDIA/Supabase) |
 | `src/memory/supabase_store.py` | Optional persistent chat history (sync client — callers run it via `asyncio.to_thread`) |
 | `src/observability.py` / `src/bootstrap.py` | LangSmith tracing setup; `bootstrap.py` must be imported before any LangChain module |
 | `monitoring/` | Prometheus scrape config + Grafana dashboard provisioning for local/compose |

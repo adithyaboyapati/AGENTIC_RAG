@@ -26,7 +26,8 @@ cp .env.example .env
 #   - RERANK_MODEL: nvidia/llama-nemotron-rerank-vl-1b-v2
 #   - CACHE_ENABLED / REDIS_URL: answer cache (needs Redis running)
 #   - RATE_LIMIT_BACKEND: auto | redis | memory
-#   - QUALITY_GUARDRAILS_ENABLED: enable extra LLM quality checks
+#   - MULTI_SOURCE_ENABLED: federate SQLite / ops API / lab MCP into retrieve()
+#   - EXTRA_SOURCES: database,api,mcp
 # See src/config.py for all options
 
 # 4. Ingest documents (already done with rag.pdf)
@@ -73,7 +74,7 @@ python -m src.cli ask "What is Self-RAG?" --mode crag -v
 #  - crag: Corrective RAG with grading loop
 #  - decompose: Break query into sub-questions
 #  - multi_hop: Sequential retrieval with reflection
-#  - tools: Tool-augmented agent (retrieve, web, calculator)
+#  - tools: Tool-augmented agent (PDFs, catalog DB, ops API, lab MCP, web, calculator)
 #  - agentic: Unified orchestrator (picks best strategy)
 #  - consensus: Multi-agent debate (retrieve → propose → challenge → judge; abstains if chunks are insufficient)
 ```
@@ -104,8 +105,14 @@ curl http://localhost:8000/modes
 # Liveness (always unauthenticated)
 curl http://localhost:8000/health
 
-# Readiness — checks Chroma, OpenAI config, Redis, optional deps
+# Readiness — checks Chroma, OpenAI config, Redis, extra sources, optional deps
 curl http://localhost:8000/health/ready
+
+# Sample ops catalog + lab MCP (demo knowledge, not the PDF corpus)
+curl 'http://localhost:8000/kb/v1/search?q=retriever-prod'
+curl -X POST http://localhost:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
 # Prometheus metrics (scraped by monitoring/prometheus.yml)
 curl http://localhost:8000/metrics
@@ -144,8 +151,9 @@ Watch: Sequential hops with reflection after each step.
 ### 4. **Diverse Needs** (Tools mode)
 ```bash
 python -m src.cli ask "What is 12 * 34 and what is Self-RAG?" --mode tools -v
+python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode tools -v
 ```
-Watch: Agent selects retrieval for Self-RAG, calculator for math.
+Watch: Agent selects retrieval for Self-RAG, calculator for math, `query_api` for owners, `query_mcp` for exp-42.
 
 ### 5. **Adaptive Strategy** (Agentic mode)
 ```bash
@@ -215,10 +223,11 @@ Agentic_RAG/
 │   ├── memory/                   # compact packing + optional Supabase
 │   ├── agents/                   # router, grader, followups, …
 │   ├── graph/                    # LangGraph per mode
-│   ├── tools/                    # retrieve_docs, web_search, calculator
+│   ├── tools/                    # retrieve_docs, query_database, query_api, query_mcp, web_search, calculator
+│   ├── sources/                  # SQLite catalog, sample ops API, lab MCP
 │   ├── rag/baseline.py
 │   ├── api/
-│   │   ├── server.py             # /query, /query/stream, /health*, /metrics
+│   │   ├── server.py             # /query, /query/stream, /kb, /mcp, /health*, /metrics
 │   │   ├── rate_limit.py         # Redis or memory sliding window
 │   │   ├── metrics.py            # Prometheus instrumentation
 │   │   ├── security.py / health.py
@@ -228,6 +237,7 @@ Agentic_RAG/
 │       └── evaluate_all_modes.py
 ├── data/
 │   ├── sample_docs/rag.pdf
+│   ├── sources/                  # knowledge.db created at runtime (gitignored)
 │   ├── eval/golden_qa.json       # Retrieval golden set (CI offline gate)
 │   ├── chroma_db/                # Local Chroma (compose uses HTTP server)
 │   └── parent_store.json
@@ -284,10 +294,10 @@ See [PRODUCTION.md](PRODUCTION.md) for ports, cache behavior, and the Grafana da
 - **Use for**: Chain-of-reasoning questions
 
 ### 6️⃣ **Tools** (Phase 6)
-- Dynamic tool selection (retrieve, web, calculator)
+- Dynamic tool selection (PDFs, catalog DB, ops API, lab MCP, web, calculator)
 - LLM picks best tool per sub-task
 - Extensible to any tool
-- **Use for**: Diverse information needs
+- **Use for**: Mixed questions (math + docs, owners + experiments)
 
 ### 7️⃣ **Agentic** (Phase 7)
 - Unified orchestrator analyzing question
@@ -356,7 +366,7 @@ python -m src.ingestion.ingest --source data/sample_docs
 
 ### "Tools mode is slow / returning 0s"
 - Tools mode requires tool output validation
-- Try: `python -m src.cli ask "What is RAG?" --mode tools -v`
+- Try: `python -m src.cli ask "Who owns retriever-prod?" --mode tools -v`
 
 ---
 

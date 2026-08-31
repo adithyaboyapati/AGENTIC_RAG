@@ -1,8 +1,8 @@
 # Learning Roadmap — Phase by Phase
 
-**Status:** Phases 0–9 complete (Phase 8 is the Consensus agent mode; Phase 8.5 is
+**Status:** Phases 0–13 complete (Phase 8 is the Consensus agent mode; Phase 8.5 is
 hardening; Phase 9 is production features: frontend, streaming, cache, metrics, circuit
-breakers, golden eval).
+breakers, golden eval; Phase 13 is multi-source retrieval).
 
 Each phase has **learning goals**, **what to build**, and **how to verify you understood it**.
 
@@ -24,6 +24,7 @@ Each phase has **learning goals**, **what to build**, and **how to verify you un
 | 10 Semantic Cache & RBAC | ✅ Done | Multi-tenant + vector cache | React / REST API |
 | 11 Multimodal & Compression | ✅ Done | Tables/Figures + Context Pruner | React / REST API |
 | 12 Async Ingest & Webhooks | ✅ Done | Background Queue + Webhooks | REST API |
+| 13 Multi-source retrieval | ✅ Done | SQLite + sample API + MCP | React / REST API / CLI |
 
 ---
 
@@ -202,7 +203,7 @@ Agent **chains sequential** retrievals (unlike Phase 4's parallel). Next query d
 ## Phase 6: Tool-Augmented Agent ✅ COMPLETE
 
 ### What Was Built
-- LangChain `@tool` decorators for multiple tools (retrieve, web, calculator)
+- LangChain `@tool` decorators for retrieve, catalog DB, ops API, lab MCP, web, calculator
 - LangGraph agent node with tool-calling capability via `llm.bind_tools()`
 - Agent selects which tool to use per sub-task dynamically
 
@@ -210,18 +211,29 @@ Agent **chains sequential** retrievals (unlike Phase 4's parallel). Next query d
 ```python
 @tool
 def retrieve_docs(query: str) -> str:
-    """Search vector store."""
-    
+    """Federated PDF + extra sources."""
+
+@tool
+def query_database(query: str) -> str:
+    """SQLite research catalog."""
+
+@tool
+def query_api(query: str) -> str:
+    """Ops catalog HTTP API."""
+
+@tool
+def query_mcp(query: str) -> str:
+    """Lab-notes MCP server."""
+
 @tool
 def web_search(query: str) -> str:
     """DuckDuckGo web search."""
-    
+
 @tool
 def calculator(expr: str) -> str:
     """Evaluate math expressions."""
 
-# LangGraph agent picks tools dynamically
-llm_with_tools = llm.bind_tools([retrieve_docs, web_search, calculator])
+llm_with_tools = llm.bind_tools(TOOLS)
 ```
 
 ### Try It
@@ -229,6 +241,7 @@ llm_with_tools = llm.bind_tools([retrieve_docs, web_search, calculator])
 python -m src.cli ask "What is 12 * 34?" --mode tools              # calculator
 python -m src.cli ask "Latest AI breakthroughs" --mode tools        # web
 python -m src.cli ask "What is Self-RAG?" --mode tools             # retrieve
+python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode tools -v
 ```
 
 ### Checkpoint
@@ -338,12 +351,16 @@ cat ragas_eval_results.json | jq '.[] | select(.mode=="crag")'
 | 3 CRAG | ✅ Done | `agents/grader.py`, `graph/crag_graph.py` |
 | 4 Decompose | ✅ Done | `agents/decomposer.py`, `graph/decompose_graph.py` |
 | 5 Multi-hop | ✅ Done | `agents/multi_hop.py`, `graph/multi_hop_graph.py` |
-| 6 Tools | ✅ Done | `tools/all_tools.py`, `graph/tools_graph.py` |
+| 6 Tools | ✅ Done | `tools/all_tools.py`, `graph/tools_graph.py`, `sources/` |
 | 7 Full Agent | ✅ Done | `agents/orchestrator.py`, `graph/agent_graph.py` |
 | 8 Production | ✅ Done | `api/`, `evaluation/`, `Dockerfile`, CI |
 | 8.5 Hardening | ✅ Done | `guardrails.py`, `privacy.py`, `api/security.py`, `api/rate_limit.py` |
 | 9 Prod features | ✅ Done | `frontend/`, `cache/`, `resilience/`, `streaming.py`, `monitoring/`, golden eval |
-| **Total** | **10/10** | — |
+| 10 Semantic cache & RBAC | ✅ Done | `cache/semantic_cache.py`, `RBACContext` |
+| 11 Multimodal & compression | ✅ Done | `ingestion/tables.py`, `ingestion/multimodal.py`, `retrieval/compression.py` |
+| 12 Async ingest | ✅ Done | `ingestion/queue.py`, `/ingest/jobs` |
+| 13 Multi-source | ✅ Done | `src/sources/` (SQLite, `/kb`, `/mcp`) |
+| **Total** | **13/13** | — |
 
 ## Phase 8.5: Production Hardening ✅ COMPLETE
 
@@ -435,6 +452,42 @@ After Phase 8, production feedback led to new capabilities:
 - **Job Status & Progress Polling** (`POST /ingest/jobs`, `GET /ingest/jobs/{job_id}`, `GET /ingest/jobs`) — real-time progress percentages, chunk metrics, and failure diagnostics
 - **HMAC-Signed Webhooks** — automated callbacks with `X-Hub-Signature-256` signature verification upon job completion or failure
 - **Ingestion Prometheus Metrics** — tracks `rag_ingest_jobs_total`, `rag_ingest_chunks_total`, and `rag_ingest_duration_seconds`
+
+## Phase 13: Multi-Source Retrieval (Database, Sample API, MCP) ✅ COMPLETE
+
+Indexed PDFs are no longer the only knowledge the agent can cite. `retrieve()` still
+runs hybrid vector search, then **federates** matching hits from three extra sources
+(`src/sources/`). Tools mode can also call each source by name.
+
+| Source | Module | Unique knowledge (demo catalog) | Try asking |
+|--------|--------|-----------------------------------|------------|
+| SQLite | `src/sources/database.py` | Paper authors/year/DOI/**citation counts**, nDCG/recall benchmarks, deployment p95/cost | “How many citations does the CRAG paper have in the catalog?” |
+| Sample API | `src/sources/sample_api.py` mounted at `/kb` | Service **owners**, replicas, index lag, glossary, incidents | “Who owns retriever-prod?” |
+| Lab MCP | `src/sources/mcp_server.py` at `POST /mcp` and stdio | Unpublished **experiments** (exp-42) and runbooks (rb-bm25) | “What did experiment 42 conclude about parent-child chunking?” |
+
+Matching extra hits are prepended to PDF chunks and tagged `[DATABASE]` / `[API]` / `[MCP]`
+in `format_docs`. Unrelated questions stay PDF-only (lexical score gate). Golden retrieval
+eval uses `include_extra=False` so catalog rows do not displace PDF chunk IDs.
+
+```bash
+# Federated retrieve (any mode that calls retrieve())
+python -m src.cli ask "Who owns retriever-prod?" --mode baseline -v
+
+# Explicit tools
+python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode tools -v
+
+# Inspect sources without the LLM
+curl 'http://localhost:8000/kb/v1/search?q=retriever-prod'
+curl -X POST http://localhost:8000/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_experiment","arguments":{"id":"exp-42"}}}'
+
+# Optional Cursor / Claude Desktop MCP (stdio)
+python -m src.sources.mcp_server
+```
+
+Toggle with `MULTI_SOURCE_ENABLED` and `EXTRA_SOURCES=database,api,mcp`. Catalog numbers
+are labeled as **internal demo data**.
 
 All of these are **optional or env-gated** — local CLI/dev still works with OpenAI + a local Chroma
 dir. For production, Redis + Chroma HTTP + frontend + Prometheus/Grafana (see

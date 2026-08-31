@@ -52,7 +52,7 @@ Every question goes through the same steps. The system never asks:
 3. **How** to retrieve (semantic vs keyword vs web)
 4. **If** the results are good enough (grading / self-evaluation)
 5. **When** to retry or try a different strategy (corrective loop)
-6. **Which tools** to use beyond vector search
+6. **Which tools** to use beyond vector search (catalog DB, ops API, lab MCP, web, calculator)
 
 ```
                     ┌─────────────────────────────────┐
@@ -60,12 +60,12 @@ Every question goes through the same steps. The system never asks:
                     │  "What should I do next?"       │
                     └───────────────┬─────────────────┘
                                     │
-              ┌─────────────────────┼─────────────────────┐
-              ▼                     ▼                     ▼
-        ┌──────────┐         ┌──────────┐         ┌──────────┐
-        │ Retrieve │         │ Web Search│        │ Calculate│
-        │ (Vector) │         │          │         │          │
-        └────┬─────┘         └──────────┘         └──────────┘
+              ┌─────────────────────┼─────────────────────┬───────────────┐
+              ▼                     ▼                     ▼               ▼
+        ┌──────────┐         ┌──────────┐         ┌──────────┐    ┌──────────┐
+        │ Retrieve │         │ DB / API │         │   MCP    │    │ Calculate│
+        │ (Vector) │         │  / Web   │         │ lab notes│    │          │
+        └────┬─────┘         └──────────┘         └──────────┘    └──────────┘
              │
              ▼
         ┌──────────┐
@@ -96,8 +96,10 @@ The agent **uses RAG** — but RAG is one tool among many, not the entire system
 
 ```
 "Hello"           → respond directly (no retrieval)
-"What is RAG?"    → retrieve from knowledge base
-"Latest AI news"  → web search (not in your docs)
+"What is RAG?"              → retrieve from indexed PDFs
+"Who owns retriever-prod?"  → ops catalog API (and/or federated retrieve)
+"What did exp-42 conclude?" → lab MCP
+"Latest AI news"            → web search (not in local sources)
 ```
 
 **Agentic behavior:** LLM classifies intent and picks a path.
@@ -163,16 +165,17 @@ Hop 3: Synthesize
 
 ### 5. Tool Use Beyond Retrieval
 
-**Problem:** Vector DB only knows what's indexed.
+**Problem:** Vector DB only knows what's indexed. Structured facts, live ops data, and unpublished lab notes live elsewhere.
 
 
-| Tool             | When Agent Uses It             |
-| ---------------- | ------------------------------ |
-| Vector retrieval | Questions about your documents |
-| Web search       | Recent events, external facts  |
-| Calculator       | Numeric computation            |
-| SQL/API          | Structured data queries        |
-| Code interpreter | Data analysis tasks            |
+| Tool             | When Agent Uses It                                      |
+| ---------------- | ------------------------------------------------------- |
+| Vector retrieval | Conceptual questions about indexed PDFs                 |
+| `query_database` | Paper metadata, citation counts, nDCG/recall, cost/p95  |
+| `query_api`      | Service owners, replicas, index lag, incidents          |
+| `query_mcp`      | Experiment ids (exp-42), ablations, runbooks            |
+| Web search       | Recent events, external facts                           |
+| Calculator       | Numeric computation                                     |
 
 
 **Agentic behavior:** Agent picks the right tool for each sub-task.
@@ -365,6 +368,13 @@ Real enterprise documents contain rich tabular matrices and visual diagrams:
 
 - **Vector Semantic Caching** calculates cosine similarity ($\ge 0.94$) against embedding queries, returning sub-millisecond cached responses without LLM spend.
 - **Document RBAC** strictly isolates data per tenant and user role at both vector and BM25 sparse retrieval stages.
+
+### 10. Multi-Source Retrieval
+
+Not every answer lives in `rag.pdf`. Federated retrieve (`src/sources/`) prepends matching
+SQLite / ops-API / MCP hits to PDF chunks; tools mode can target a source explicitly.
+Catalog values are demo data — cite `db://`, `api://`, and `lab://` URIs rather than treating
+them as live production metrics.
 
 ### Resilience & Ops (Production Layer)
 

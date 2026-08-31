@@ -100,6 +100,17 @@ def check_nvidia_configured() -> dict[str, str]:
     return {"status": "ok", "detail": "NVIDIA API key configured"}
 
 
+def check_extra_sources() -> dict[str, str]:
+    """SQLite catalog, sample ops API, and lab MCP (optional extra retrievers)."""
+    try:
+        from src.sources.federation import extra_sources_status
+
+        return extra_sources_status()
+    except Exception as exc:
+        logger.warning("Extra-source health check failed: %s", type(exc).__name__)
+        return {"status": "degraded", "detail": f"extra sources error ({type(exc).__name__})"}
+
+
 def deep_health() -> dict:
     """Aggregate health status for /health/ready."""
     checks = {
@@ -110,6 +121,7 @@ def deep_health() -> dict:
         "groq": check_groq_configured(),
         "supabase": check_supabase_configured(),
         "nvidia": check_nvidia_configured(),
+        "extra_sources": check_extra_sources(),
     }
     # Required for healthy: chroma + openai (+ data_dir in persistent mode)
     required = ["chroma", "openai", "data_dir"]

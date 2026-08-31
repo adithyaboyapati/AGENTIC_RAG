@@ -14,8 +14,9 @@ export function EmptyState({ mode, onExample }: EmptyStateProps) {
       <p className="eyebrow">{meta.phase} · {meta.label}</p>
       <h2 className="brand-hero">Agentic RAG Lab</h2>
       <p className="lede">
-        Ask grounded questions over the RAG survey corpus. The agent decides whether to
-        retrieve, rewrite, decompose, or reach for tools — then shows you the trail.
+        Ask grounded questions over PDFs, the paper catalog, the ops API, and lab MCP notes.
+        The agent decides whether to retrieve, rewrite, decompose, or reach for tools — then
+        shows you the trail.
       </p>
       <div className="example-row">
         <button type="button" className="example-chip" onClick={() => onExample(meta.example)}>
@@ -31,9 +32,9 @@ export function EmptyState({ mode, onExample }: EmptyStateProps) {
         <button
           type="button"
           className="example-chip"
-          onClick={() => onExample('Compare naive RAG and modular RAG')}
+          onClick={() => onExample('Who owns retriever-prod and what did experiment 42 conclude?')}
         >
-          Compare RAG variants
+          Catalog + lab MCP
         </button>
       </div>
     </section>

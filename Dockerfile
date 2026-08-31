@@ -36,7 +36,7 @@ RUN pip install --no-index --find-links=/wheels -r requirements.txt \
 # Create the user before copying so application code is owned by root and is
 # not writable by the process that runs it.
 RUN useradd --create-home --uid 1000 appuser \
-    && mkdir -p /data/chroma_db /app/data \
+    && mkdir -p /data/chroma_db /app/data /app/data/sources \
     && chown -R appuser:appuser /data /app/data
 
 # Application code (secrets/data excluded via .dockerignore)

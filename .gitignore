@@ -14,6 +14,10 @@ venv/
 data/chroma_db/
 data/parent_store.json
 data/flashrank_cache/
+data/sources/*.db
+data/sources/*.db-journal
+data/sources/*.db-wal
+data/sources/*.db-shm
 
 # IDE
 .idea/

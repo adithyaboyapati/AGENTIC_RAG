@@ -189,10 +189,26 @@ def _log_retrieval(query: str, docs: list[Document], mode: str) -> None:
     )
 
 
+def _attach_extra_sources(
+    query: str,
+    docs: list[Document],
+    include_extra: bool | None,
+) -> list[Document]:
+    """Prepend database / API / MCP hits when multi-source retrieval is on."""
+    use_extra = settings.multi_source_enabled if include_extra is None else include_extra
+    if not use_extra:
+        return docs
+    from src.sources.federation import merge_with_pdf, search_extra_sources
+
+    extra = search_extra_sources(query)
+    return merge_with_pdf(docs, extra)
+
+
 def retrieve(
     query: str,
     top_k: int | None = None,
     rbac_context: RBACContext | None = None,
+    include_extra: bool | None = None,
 ) -> list[Document]:
     """Retrieve → (optional) rerank → top_k, optionally expanding to parent sections.
 
@@ -201,6 +217,7 @@ def retrieve(
       2. Cross-encoder rerank (FlashRank) when ``RERANK_ENABLED``
       3. Keep ``top_k`` (or a larger pool when parent-expanding)
       4. Optional parent-section expansion
+      5. Optional extra sources (SQLite catalog, sample API, lab MCP)
     """
     from src.schemas import RBACContext
 
@@ -239,12 +256,17 @@ def retrieve(
 
         expanded = expand_children_to_parents(docs)[:final_k]
         expanded = _filter_rbac(expanded, ctx)
-        _log_retrieval(query, expanded, f"{mode_label}+parent")
+        before_extra = expanded
+        expanded = _attach_extra_sources(query, expanded, include_extra)
+        extra_bit = "+sources" if expanded is not before_extra else ""
+        _log_retrieval(query, expanded, f"{mode_label}+parent{extra_bit}")
         return expanded
 
     docs = docs[:final_k]
-    _log_retrieval(query, docs, mode_label)
-    return docs
+    merged = _attach_extra_sources(query, docs, include_extra)
+    extra_bit = "+sources" if merged is not docs else ""
+    _log_retrieval(query, merged, f"{mode_label}{extra_bit}")
+    return merged
 
 
 def format_docs(docs: list[Document], query: str | None = None) -> str:
@@ -270,7 +292,13 @@ def format_docs(docs: list[Document], query: str | None = None) -> str:
         chunk_id = doc.metadata.get("chunk_id") or doc.metadata.get("id")
         id_bit = f" ({chunk_id})" if chunk_id else ""
         chunk_type = doc.metadata.get("chunk_type")
-        type_bit = f" [{chunk_type.upper()}]" if chunk_type in ("table", "figure") else ""
+        source_type = (doc.metadata.get("source_type") or "").lower()
+        if source_type in ("database", "api", "mcp"):
+            type_bit = f" [{source_type.upper()}]"
+        elif chunk_type in ("table", "figure"):
+            type_bit = f" [{chunk_type.upper()}]"
+        else:
+            type_bit = ""
 
         parts.append(
             f"[{i}] Source: {source}{page_bit}{section_bit}{type_bit}{id_bit}\n{doc.page_content}"

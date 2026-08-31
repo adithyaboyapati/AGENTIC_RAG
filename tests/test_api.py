@@ -207,3 +207,45 @@ def test_query_rejects_empty_question(client, monkeypatch):
     monkeypatch.setattr(settings, "require_api_key", False)
     resp = client.post("/query", json={"question": "", "mode": "baseline"})
     assert resp.status_code == 422
+
+
+def test_kb_search_and_system_lookup(client, monkeypatch):
+    monkeypatch.setattr(settings, "require_api_key", False)
+    search = client.get("/kb/v1/search", params={"q": "Who owns retriever-prod"})
+    assert search.status_code == 200
+    results = search.json()["results"]
+    assert results
+    assert any("platform-search" in r["body"] for r in results)
+
+    system = client.get("/kb/v1/systems/retriever-prod")
+    assert system.status_code == 200
+    assert system.json()["owner"] == "platform-search"
+
+    missing = client.get("/kb/v1/glossary/not-a-term")
+    assert missing.status_code == 404
+
+
+def test_mcp_http_initialize_and_call(client, monkeypatch):
+    monkeypatch.setattr(settings, "require_api_key", False)
+    init = client.post(
+        "/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+    )
+    assert init.status_code == 200
+    assert init.json()["result"]["serverInfo"]["name"] == "agentic-rag-lab"
+
+    called = client.post(
+        "/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "search_lab_knowledge",
+                "arguments": {"query": "exp-42 chunking"},
+            },
+        },
+    )
+    assert called.status_code == 200
+    text = called.json()["result"]["content"][0]["text"]
+    assert "12%" in text

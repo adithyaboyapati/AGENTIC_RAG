@@ -35,7 +35,7 @@ class StrategyChoice(BaseModel):
     strategy: str = Field(
         description=(
             "Strategy choice: 'decompose' (comparisons), 'multi_hop' (sequential), "
-            "'tools' (mixed), or 'simple' (direct retrieval)"
+            "'tools' (math, web, database, API, or MCP), or 'simple' (direct retrieval)"
         )
     )
     reasoning: str = Field(description="Why this strategy was chosen")
@@ -74,8 +74,10 @@ Strategies:
    → Example: "What fallback does CRAG use?" → first learn CRAG, then find fallback.
    → Sequential hops where each depends on the previous.
    
-3. tools — Use when the question mixes retrieval with math, web search, or needs function calling.
-   → Example: "What is Self-RAG and what is 20*30?" → needs both retrieval and calculator.
+3. tools — Use when the question mixes retrieval with math, web search, structured
+   catalog lookup, the ops API, or lab-notes MCP, or needs function calling.
+   → Example: "What is Self-RAG and what is 20*30?" → retrieval + calculator.
+   → Example: "Who owns retriever-prod and what did exp-42 conclude?" → API + MCP.
    
 4. simple — Use for straightforward factual questions about a single topic.
    → Single retrieval pass, grade, and generate.

@@ -50,6 +50,7 @@ from src.tools.web_search import web_search
 
 class AgentState(TypedDict):
     question: str
+    search_query: str
     route: str
     route_reason: str
     strategy: str
@@ -395,7 +396,8 @@ def rewrite_node(state: AgentState) -> dict:
     if state.get("abort"):
         return {}
     try:
-        rewritten = rewrite_query(state["question"], state["question"])
+        previous = (state.get("search_query") or state["question"]).strip() or state["question"]
+        rewritten = rewrite_query(state["question"], previous)
         query = rewritten.query
         reason = rewritten.reason
     except Exception as exc:
@@ -412,6 +414,7 @@ def rewrite_node(state: AgentState) -> dict:
         }
     new_docs = retrieve(query)
     return {
+        "search_query": query,
         "documents": new_docs,
         "sources": docs_to_sources(new_docs),
         "retry_count": state["retry_count"] + 1,
@@ -621,6 +624,7 @@ def ask_agentic(question: str) -> AgentResponse:
         graph,
         {
             "question": question,
+            "search_query": question,
             "route": "",
             "route_reason": "",
             "strategy": "",

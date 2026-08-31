@@ -14,6 +14,10 @@ from src.ingestion.ingest import get_vector_store
 from src.retrieval.reranker import rerank_documents
 from src.schemas import RBACContext
 
+EMPTY_RETRIEVAL_MESSAGE = (
+    "I couldn't find relevant documents in the knowledge base for this question."
+)
+
 logger = logging.getLogger(__name__)
 
 _bm25_lock = threading.Lock()

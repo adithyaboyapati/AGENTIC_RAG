@@ -7,16 +7,35 @@ from unittest.mock import MagicMock, patch
 from langchain_core.documents import Document
 
 from src.agents.grader import DocumentGrade, GradingResult, grade_documents
-from src.graph.agent_graph import build_full_agent_graph, strategy_condition
+from src.graph.agent_graph import build_full_agent_graph, rewrite_node, strategy_condition
+from src.graph.consensus_graph import build_consensus_graph
 from src.graph.crag_graph import build_crag_graph
-from src.graph.router_graph import build_router_graph
+from src.graph.decompose_graph import build_decompose_graph
+from src.graph.multi_hop_graph import build_multi_hop_graph
+from src.graph.router_graph import build_router_graph, generate_node
+from src.graph.tools_graph import build_tools_graph
 from src.rag.baseline import ask_baseline
+from src.retrieval.retriever import EMPTY_RETRIEVAL_MESSAGE
+
+
+def _edge_pairs(compiled) -> set[tuple[str, str]]:
+    return {(e.source, e.target) for e in compiled.get_graph().edges}
 
 
 def test_graphs_compile():
-    assert build_router_graph() is not None
-    assert build_crag_graph() is not None
-    assert build_full_agent_graph() is not None
+    builders = [
+        build_router_graph,
+        build_crag_graph,
+        build_decompose_graph,
+        build_multi_hop_graph,
+        build_tools_graph,
+        build_full_agent_graph,
+        build_consensus_graph,
+    ]
+    for build in builders:
+        compiled = build()
+        assert compiled is not None
+        assert compiled.get_graph().nodes
 
 
 def test_strategy_condition_defaults_invalid_to_simple():
@@ -62,14 +81,60 @@ def test_ask_baseline_returns_context_docs():
     assert "rag.pdf#p1" in result.sources
 
 
+def test_ask_baseline_skips_generation_when_empty():
+    with patch("src.rag.baseline.retrieve", return_value=[]):
+        with patch("src.rag.baseline.stream_text") as mock_stream:
+            result = ask_baseline("What is RAG?")
+    mock_stream.assert_not_called()
+    assert result.answer == EMPTY_RETRIEVAL_MESSAGE
+    assert result.context_docs == []
+
+
+def test_router_generate_skips_empty_documents():
+    update = generate_node(
+        {
+            "question": "What is RAG?",
+            "documents": [],
+            "route": "retrieve",
+            "route_reason": "",
+            "web_context": "",
+            "answer": "",
+            "sources": [],
+            "steps": [],
+        }
+    )
+    assert update["answer"] == EMPTY_RETRIEVAL_MESSAGE
+    assert "skipped generation" in update["steps"][0]
+
+
 def test_agentic_edges_route_strategies_through_grade():
-    graph = build_full_agent_graph()
-    # Compiled StateGraph exposes nodes; ensure grade is reachable from strategies
-    # via graph definition inspection on the builder-equivalent compiled structure.
-    assert "grade" in graph.get_graph().nodes
-    assert "decompose" in graph.get_graph().nodes
-    assert "multi_hop" in graph.get_graph().nodes
-    assert "tools" in graph.get_graph().nodes
+    pairs = _edge_pairs(build_full_agent_graph())
+    for src in ("decompose", "multi_hop", "tools", "simple_retrieve"):
+        assert (src, "grade") in pairs
+    assert ("rewrite", "grade") in pairs
+    assert ("grade", "generate") in pairs
+    assert ("grade", "rewrite") in pairs
+
+
+def test_rewrite_node_compounds_previous_search_query():
+    rewritten = MagicMock()
+    rewritten.query = "corrective retrieval augmented generation fallback"
+    rewritten.reason = "expanded CRAG"
+    docs = [Document(page_content="fallback is web search", metadata={"source": "rag.pdf"})]
+    with patch("src.graph.agent_graph.rewrite_query", return_value=rewritten) as mock_rw:
+        with patch("src.graph.agent_graph.retrieve", return_value=docs):
+            update = rewrite_node(
+                {
+                    "question": "What fallback does CRAG use?",
+                    "search_query": "CRAG fallback",
+                    "retry_count": 0,
+                    "abort": False,
+                }
+            )
+    mock_rw.assert_called_once_with("What fallback does CRAG use?", "CRAG fallback")
+    assert update["search_query"] == rewritten.query
+    assert update["retry_count"] == 1
+    assert len(update["documents"]) == 1
 
 
 def test_evaluate_uses_context_docs_not_source_paths():

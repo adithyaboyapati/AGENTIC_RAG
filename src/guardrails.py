@@ -506,7 +506,7 @@ class QualityGuardrails:
                 GuardrailViolation(
                     rule="low_faithfulness",
                     message=f"Answer not grounded in context (faithfulness {faithfulness:.2f} < {cls.MIN_FAITHFULNESS})",
-                    severity="warning",
+                    severity="error",
                     value=faithfulness,
                     limit=cls.MIN_FAITHFULNESS,
                 )

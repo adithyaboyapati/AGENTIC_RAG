@@ -3,14 +3,14 @@
 -r requirements.txt
 
 # Lint
-ruff==0.15.15
+ruff==0.16.5
 
 # Test
 pytest-cov==7.1.0
 pytest-timeout==2.5.0
 
 # Security scanning
-pip-audit==2.9.0
+pip-audit==2.10.1
 
 # Locust is not installed here. 2.42.1 is the last release that supports
 # Python 3.10 and it requires pytest<9, which conflicts with pytest==9.1.1.

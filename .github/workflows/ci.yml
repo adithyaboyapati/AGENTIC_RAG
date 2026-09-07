@@ -76,7 +76,7 @@ jobs:
           OPENAI_API_KEY: test-key
         run: python -m src.evaluation.eval_gates
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage

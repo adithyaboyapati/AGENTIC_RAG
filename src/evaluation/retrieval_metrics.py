@@ -88,9 +88,14 @@ def validate_golden_set_offline(path: Path | None = None) -> dict:
     if not demo_hit or demo_recall < 1.0:
         errors.append("internal keyword scorer smoke failed")
 
+    with_keywords = sum(1 for item in items if isinstance(item, dict) and item.get("expected_keywords"))
+    keyword_coverage = with_keywords / len(items) if items else 0.0
+
     return {
         "ok": not errors,
         "count": len(items),
+        "item_count": len(items),
+        "keyword_coverage": round(keyword_coverage, 4),
         "errors": errors,
     }
 

@@ -63,19 +63,44 @@ def search_source(source: str, query: str, top_k: int = 4) -> list[Document]:
         return []
 
 
+def filter_documents_rbac(docs: list[Document], rbac_context) -> list[Document]:
+    """Filter federated documents using RBACContext.is_authorized()."""
+    from src.schemas import RBACContext
+
+    if not isinstance(rbac_context, RBACContext) or not settings.rbac_enabled:
+        return docs
+    filtered: list[Document] = []
+    for doc in docs:
+        meta = doc.metadata or {}
+        if rbac_context.is_authorized(
+            meta.get("tenant_id"),
+            meta.get("access_groups") or meta.get("allowed_roles"),
+            meta.get("classification"),
+        ):
+            filtered.append(doc)
+    return filtered
+
+
 def search_extra_sources(
     query: str,
     *,
     sources: list[str] | None = None,
     per_source_k: int = 2,
     max_extra: int | None = None,
+    rbac_context=None,
 ) -> list[Document]:
     """Query enabled extra sources and keep the highest-scoring hits."""
+    from src.schemas import RBACContext
+
     names = sources if sources is not None else enabled_extra_sources()
     cap = max_extra if max_extra is not None else settings.multi_source_max_extra
+    ctx = rbac_context if isinstance(rbac_context, RBACContext) else None
     collected: list[Document] = []
     for name in names:
         collected.extend(search_source(name, query, top_k=per_source_k))
+
+    if ctx is not None and settings.rbac_enabled:
+        collected = filter_documents_rbac(collected, ctx)
 
     collected.sort(
         key=lambda doc: float(doc.metadata.get("score") or 0.0),

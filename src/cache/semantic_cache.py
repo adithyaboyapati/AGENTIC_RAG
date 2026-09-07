@@ -37,6 +37,7 @@ class _SemanticCacheEntry:
     mode: str
     tenant_id: str
     roles_key: str
+    pipeline_version: str
     vector: list[float]
     response_json: str
     created_at: float
@@ -68,16 +69,54 @@ class SemanticCache:
         rbac_context: RBACContext | None = None,
     ) -> AgentResponse | None:
         """Look up semantically equivalent question in cache."""
+        from src.evaluation.shadow_context import is_observational_execution
+
+        if is_observational_execution():
+            return None
         if not settings.cache_enabled or not settings.semantic_cache_enabled:
             return None
 
         ctx = rbac_context or RBACContext()
         tenant_id = (ctx.tenant_id or "default").strip().lower()
         roles_key = ctx.roles_key()
+        from src.evaluation.pipeline_version import cache_pipeline_version
+
+        pipeline_version = cache_pipeline_version()
 
         query_vec = self._get_embedding(question)
         if query_vec is None:
             return None
+
+        # Shared Redis backend (graceful miss when unavailable).
+        try:
+            from src.cache.semantic_cache_redis import get_redis_semantic_backend
+
+            redis_hit = get_redis_semantic_backend().lookup(
+                question=question,
+                mode=mode,
+                tenant_id=tenant_id,
+                roles_key=roles_key,
+                query_vector=query_vec,
+                pipeline_version=pipeline_version,
+            )
+            if redis_hit is not None:
+                from src.cache.redis_cache import _deserialize
+
+                res = _deserialize(redis_hit.response_json)
+                steps = list(res.steps or [])
+                if "semantic_cache_hit" not in steps:
+                    steps = ["semantic_cache_hit(redis)", *steps]
+                res.steps = steps
+                res.tenant_id = tenant_id
+                try:
+                    from src.api.metrics import record_cache_hit
+
+                    record_cache_hit()
+                except Exception:
+                    pass
+                return res
+        except Exception:
+            logger.debug("Redis semantic cache lookup failed", exc_info=True)
 
         best_score = -1.0
         best_entry: _SemanticCacheEntry | None = None
@@ -92,6 +131,8 @@ class SemanticCache:
                 if entry.mode != mode:
                     continue
                 if entry.tenant_id != tenant_id or entry.roles_key != roles_key:
+                    continue
+                if entry.pipeline_version != pipeline_version:
                     continue
 
                 sim = _cosine_similarity(query_vec, entry.vector)
@@ -141,6 +182,10 @@ class SemanticCache:
         rbac_context: RBACContext | None = None,
     ) -> bool:
         """Store response in semantic cache."""
+        from src.evaluation.shadow_context import is_observational_execution
+
+        if is_observational_execution():
+            return False
         if not settings.cache_enabled or not settings.semantic_cache_enabled:
             return False
         if getattr(response, "error_code", None):
@@ -151,6 +196,9 @@ class SemanticCache:
         ctx = rbac_context or RBACContext()
         tenant_id = (ctx.tenant_id or "default").strip().lower()
         roles_key = ctx.roles_key()
+        from src.evaluation.pipeline_version import cache_pipeline_version
+
+        pipeline_version = cache_pipeline_version()
 
         query_vec = self._get_embedding(question)
         if query_vec is None:
@@ -180,6 +228,7 @@ class SemanticCache:
             mode=mode,
             tenant_id=tenant_id,
             roles_key=roles_key,
+            pipeline_version=pipeline_version,
             vector=query_vec,
             response_json=payload,
             created_at=time.time(),
@@ -190,6 +239,27 @@ class SemanticCache:
             if len(self._entries) >= self.max_entries:
                 self._entries.pop(0)
             self._entries.append(entry)
+
+        try:
+            from src.cache.semantic_cache_redis import (
+                RedisSemanticEntry,
+                get_redis_semantic_backend,
+            )
+
+            get_redis_semantic_backend().store(
+                RedisSemanticEntry(
+                    question=question,
+                    mode=mode,
+                    tenant_id=tenant_id,
+                    roles_key=roles_key,
+                    pipeline_version=pipeline_version,
+                    vector=query_vec,
+                    response_json=payload,
+                    created_at=entry.created_at,
+                )
+            )
+        except Exception:
+            logger.debug("Redis semantic cache store failed", exc_info=True)
 
         logger.debug(
             "Stored in semantic cache | mode=%s | tenant=%s | entries=%d",
@@ -204,11 +274,17 @@ class SemanticCache:
         with self._lock:
             count = len(self._entries)
             self._entries.clear()
-            return count
+        try:
+            from src.cache.semantic_cache_redis import get_redis_semantic_backend
+
+            count += get_redis_semantic_backend().clear()
+        except Exception:
+            pass
+        return count
 
 
 # Singleton semantic cache instance
-_global_semantic_cache = SemanticCache()
+_global_semantic_cache = SemanticCache(max_entries=max(1, int(settings.semantic_cache_max_entries)))
 
 
 def get_semantic_cache() -> SemanticCache:

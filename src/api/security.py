@@ -8,6 +8,7 @@ from fastapi import HTTPException, Security
 from fastapi.security import APIKeyHeader
 
 from src.config import is_production, settings
+from src.schemas import RBACContext
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -64,6 +65,27 @@ async def verify_metrics_access(api_key: str | None = Security(api_key_header)) 
     """Gate /metrics. Disable with ``PROTECT_METRICS_ENDPOINT=false``."""
     _verify_operational_access(
         api_key, enabled=settings.protect_metrics_endpoint, name="/metrics"
+    )
+
+
+def resolve_request_rbac(
+    tenant_id: str | None,
+    user_roles: list[str] | None,
+) -> RBACContext:
+    """Bind RBAC from the request only when explicitly trusted.
+
+    A shared API key is not a principal. Until JWT/OIDC (or per-key tenant
+    maps) exist, production callers all share ``default`` / ``public``.
+    """
+    if settings.trust_client_rbac and not is_production():
+        roles = [r for r in (user_roles or []) if str(r).strip()] or ["public"]
+        return RBACContext(
+            tenant_id=(tenant_id or settings.default_tenant_id or "default"),
+            user_roles=roles,
+        )
+    return RBACContext(
+        tenant_id=settings.default_tenant_id or "default",
+        user_roles=["public"],
     )
 
 

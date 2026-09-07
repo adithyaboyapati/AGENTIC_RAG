@@ -7,7 +7,7 @@ function newId(): string {
   return crypto.randomUUID().replace(/-/g, '')
 }
 
-export function createEmptyChat(mode: AgentMode = 'agentic'): StoredChat {
+export function createEmptyChat(mode: AgentMode = 'canonical'): StoredChat {
   const now = Date.now()
   return {
     id: newId(),
@@ -26,27 +26,44 @@ export function titleFromMessage(content: string): string {
   return cleaned.length > 48 ? `${cleaned.slice(0, 48).trim()}…` : cleaned
 }
 
-/** Drop bulky fields if needed to fit localStorage. */
 export function slimMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((m) => {
-    if (!m.trace) return m
-    const { question, mode, answer, sources, route, route_reason, steps, follow_ups, latency_ms, session_id } =
-      m.trace
-    return {
-      ...m,
-      trace: {
-        question,
-        mode,
-        answer,
-        sources,
-        route,
-        route_reason,
-        steps,
-        follow_ups,
-        latency_ms,
-        session_id,
-      },
-    }
+    if (!m.trace && !m.pipeline) return m
+    const trace = m.trace
+      ? {
+          question: m.trace.question,
+          mode: m.trace.mode,
+          answer: m.trace.answer,
+          sources: m.trace.sources,
+          citations: m.trace.citations,
+          route: m.trace.route,
+          route_reason: m.trace.route_reason,
+          steps: m.trace.steps,
+          follow_ups: m.trace.follow_ups,
+          latency_ms: m.trace.latency_ms,
+          session_id: m.trace.session_id,
+          tenant_id: m.trace.tenant_id,
+          consensus_score: m.trace.consensus_score,
+          critique_summary: m.trace.critique_summary,
+          error_code: m.trace.error_code,
+        }
+      : m.trace
+    const pipeline = m.pipeline
+      ? {
+          type: 'pipeline' as const,
+          stages: m.pipeline.stages.map((stage) => {
+            if (stage.id !== 'context' || !stage.data) return stage
+            const docs = Array.isArray(stage.data.context_docs)
+              ? (stage.data.context_docs as Array<{ text?: string }>).slice(0, 8).map((doc) => ({
+                  ...doc,
+                  text: (doc.text || '').slice(0, 1200),
+                }))
+              : stage.data.context_docs
+            return { ...stage, data: { ...stage.data, context_docs: docs } }
+          }),
+        }
+      : m.pipeline
+    return { ...m, streaming: undefined, trace, pipeline }
   })
 }
 
@@ -62,7 +79,6 @@ export function loadChatStore(): ChatStoreData {
       const chat = createEmptyChat()
       return { version: 1, activeChatId: chat.id, chats: [chat] }
     }
-    // Ensure active chat exists
     if (!parsed.chats.some((c) => c.id === parsed.activeChatId)) {
       parsed.activeChatId = parsed.chats[0].id
     }
@@ -90,12 +106,11 @@ export function saveChatStore(store: ChatStoreData): void {
   try {
     localStorage.setItem(CHAT_STORE_KEY, JSON.stringify(payload))
   } catch {
-    // Quota exceeded — strip traces and retry
     const stripped: ChatStoreData = {
       ...payload,
       chats: payload.chats.map((c) => ({
         ...c,
-        messages: c.messages.map(({ trace: _t, ...rest }) => rest),
+        messages: c.messages.map(({ trace: _t, pipeline: _p, ...rest }) => rest),
       })),
     }
     try {
@@ -143,4 +158,41 @@ export function formatRelativeTime(ts: number): string {
   const days = Math.floor(hours / 24)
   if (days < 7) return `${days}d ago`
   return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+}
+
+const DEBUG_KEY = 'agentic-rag-debug'
+const DEBUG_DOCK_KEY = 'agentic-rag-debug-dock'
+
+export type DebugDock = 'left' | 'right'
+
+export function loadDebugMode(): boolean {
+  try {
+    return localStorage.getItem(DEBUG_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function saveDebugMode(on: boolean): void {
+  try {
+    localStorage.setItem(DEBUG_KEY, on ? '1' : '0')
+  } catch {
+    /* ignore */
+  }
+}
+
+export function loadDebugDock(): DebugDock {
+  try {
+    return localStorage.getItem(DEBUG_DOCK_KEY) === 'left' ? 'left' : 'right'
+  } catch {
+    return 'right'
+  }
+}
+
+export function saveDebugDock(dock: DebugDock): void {
+  try {
+    localStorage.setItem(DEBUG_DOCK_KEY, dock)
+  } catch {
+    /* ignore */
+  }
 }

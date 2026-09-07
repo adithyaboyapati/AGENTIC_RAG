@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Eight retrieval strategies, one API</strong> — LangChain + LangGraph research assistant<br/>
+  <strong>Canonical Agentic RAG</strong> — unified LangGraph pipeline with evidence, verification, and citations<br/>
   with citations, guardrails, and the hardening needed to run it beyond a notebook.
 </p>
 
@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/LangGraph-orchestrated-purple.svg" alt="LangGraph" />
 </p>
 
-A question hits a **router**, a **strategy picker**, and a **retriever** that can grade, rewrite, and retry. Retrieval is not PDF-only: matching hits from a SQLite research catalog, a sample ops API, and a lab MCP server are cited next to the corpus chunks. Every answer runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
+A question hits the **canonical Agentic RAG pipeline**: automatic routing, strategy selection, federated retrieval, evidence grading, verification, and citations. Retrieval is not PDF-only: matching hits from a SQLite research catalog, a sample ops API, and a lab MCP server are cited next to the corpus chunks. Every answer runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
 
 ```
 User Question
@@ -26,52 +26,50 @@ User Question
 │ Query Router│────▶│ Strategy Picker  │────▶│  Retriever  │
 └─────────────┘     │ (decompose /     │     └──────┬──────┘
      │               │  multi-hop /     │            │
-     │ direct answer │  tools / simple) │            ▼
+     │ direct answer │  simple / auto)  │            ▼
      ▼               └──────────────────┘     ┌─────────────┐
-┌─────────────┐                               │  Grader     │─── retry / rewrite
+┌─────────────┐                               │  Evidence   │─── rewrite / retry
 │  LLM Answer │                               └──────┬──────┘
-└─────────────┘                                      │ good
+└─────────────┘                                      │ verified
                                                       ▼
                                                ┌─────────────┐
-                                               │  Generator  │
+                                               │ Verification│
                                                └─────────────┘
 ```
 
-**Try it:** [Quick start](#quick-start) · [Modes](#agent-modes) · [Docs](#documentation)
+**Try it:** [Quick start](#quick-start) · [Architecture](#agent-modes) · [Docs](#documentation)
 
 ---
 
 ## Why this exists
 
-Most RAG demos are a single retrieve → generate chain. This repo is a **learning system that grew into a production-shaped service**: interchangeable agent graphs, hybrid retrieval, and the boring controls (auth, budgets, caches, probes) that keep an LLM from becoming an unbounded bill.
+Most RAG demos are a single retrieve → generate chain. This repo is a **learning system that grew into a production-shaped service**: a single canonical Agentic RAG graph, hybrid retrieval, and the operational controls (auth, budgets, caches, continuous evaluation) that keep an LLM from becoming an unbounded bill.
 
 | Traditional RAG | This project |
 |-----------------|--------------|
-| Always retrieve → generate | Agent decides: retrieve 0, 1, or N times |
-| One pass, no retry | CRAG grades chunks, rewrites, falls back to web |
+| Always retrieve → generate | Canonical graph decides route, strategy, and retries |
+| One pass, no retry | Evidence grading, rewrite, and web fallback |
 | One corpus (PDFs) | PDFs plus SQLite catalog, sample ops API, and lab MCP |
-| One query in | Decompose, multi-hop, or tool-calling |
-| One generator | Optional **consensus** debate over the same chunks |
+| One query in | Internal decompose / multi-hop strategies |
+| One generator | Verification + citation provenance on every answer |
 | Notebook-only | FastAPI + React, Docker Compose, Prometheus |
 
-Concepts: [docs/CONCEPTS.md](docs/CONCEPTS.md). How each mode was built: [docs/ROADMAP.md](docs/ROADMAP.md).
+Concepts: [docs/CONCEPTS.md](docs/CONCEPTS.md). Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Migration history: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ---
 
 ## Agent modes
 
-| Mode | Phase | What it does |
-|------|-------|----------------|
-| `baseline` | 1 | Fixed retrieve → generate. Fastest baseline. |
-| `router` | 2 | Direct answer, retrieval, or web search. |
-| `crag` | 3 | Grades docs, rewrites on failure, web fallback. |
-| `decompose` | 4 | Splits the question; parallel retrieve (`Send`). |
-| `multi_hop` | 5 | Sequential retrieval; each hop uses the last. |
-| `tools` | 6 | Function calling: PDFs, catalog DB, ops API, lab MCP, web search, calculator. |
-| `agentic` | 7 | Orchestrator: pick a strategy, then CRAG-grade. |
-| `consensus` | 8 | Proposer → Challenger → Judge **on retrieved chunks**. Abstains when the sources cannot support the question. |
+Production uses a **single canonical pipeline** (`canonical_pipeline_version = v1`).
 
-All modes return **citations** and **follow-up questions**. Consensus is stricter on grounding, not a guarantee of span-level faithfulness — details in [docs/GUARDRAILS.md](docs/GUARDRAILS.md).
+| Client mode | Status | Behavior |
+|-------------|--------|----------|
+| `canonical` | **Preferred** | Full canonical graph with automatic strategy selection |
+| `agentic`, `baseline`, `router`, `crag`, `decompose`, `multi_hop`, `tools`, `consensus` | Deprecated | Accepted for backward compatibility; mapped internally to canonical strategies; emits deprecation metrics |
+
+The UI exposes one production mode. Clients should use `POST /query` or `POST /query/stream` and consume **answer**, **citations**, **verification**, and **response_status** — not graph implementation details.
+
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/LEGACY_RETIREMENT_INVENTORY.md](docs/LEGACY_RETIREMENT_INVENTORY.md).
 
 ---
 
@@ -99,11 +97,11 @@ cd frontend && npm install && npm run dev
 **CLI / API / Streamlit**
 
 ```bash
-python -m src.cli ask "What is corrective RAG?" --mode crag -v
+python -m src.cli ask "What is corrective RAG?" --mode canonical -v
 
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is Self-RAG?", "mode": "agentic"}'
+  -d '{"question": "What is Self-RAG?", "mode": "canonical"}'
 
 streamlit run streamlit_app.py     # http://localhost:8501
 ```
@@ -121,11 +119,13 @@ pytest -q
 
 **Retrieval** — Hybrid dense + BM25 (RRF) or MMR; NVIDIA or FlashRank rerank; parent-child sections; table/figure chunks; sentence-level context compression. Extra sources (SQLite papers/benchmarks, `/kb` ops catalog, lab MCP) federate into `retrieve()` when they match.
 
-**Safety** — Jailbreak/injection scans (direct + indirect), PII/PHI redact-or-block, AST-only calculator (no `eval()`), production boot that refuses missing keys, short `API_KEY`, or `CORS_ORIGINS=*`.
+**Safety** — Jailbreak/injection scans (direct + indirect, including retrieved chunks), PII/PHI redact-or-block, AST-only calculator (no `eval()`), webhook SSRF and ingest-path allowlists, production boot that refuses missing keys, short `API_KEY`, `CORS_ORIGINS=*`, or client-asserted RBAC.
 
 **Serving** — SSE streaming (`POST /query/stream`), per-client rate limits, token budgets, concurrency ceiling (`503 Retry-After`), Redis exact + semantic cache, Groq chat fallback, circuit breakers on rerank and web search.
 
 **Ops** — Docker Compose (API + Redis + Chroma + frontend; Prometheus/Grafana optional), `/health` + `/health/ready` + `/metrics`, LangSmith tracing, golden-set retrieval gate in CI.
+
+**Feedback loop** — Thumbs up/down + failure tags + free-text comment on every answer (`POST /feedback`), PII-redacted and stored in Supabase (`answer_feedback`, SQLite fallback in dev). `GET /feedback/summary` gives negative-rate per mode and top failure categories; `rag_feedback_total{mode,rating}` is scraped by Prometheus; `python -m src.feedback.export` turns thumbs-down into golden-set candidates for the eval gate.
 
 Full list and deploy notes: [docs/PRODUCTION.md](docs/PRODUCTION.md) · [docs/GUARDRAILS.md](docs/GUARDRAILS.md) · [docs/PRIVACY_COMPLIANCE.md](docs/PRIVACY_COMPLIANCE.md).
 
@@ -134,18 +134,19 @@ Full list and deploy notes: [docs/PRODUCTION.md](docs/PRODUCTION.md) · [docs/GU
 ## Repository map
 
 ```
-frontend/          React + Vite chat (SSE, citations, traces)
-src/graph/         LangGraph modes (baseline → consensus)
-src/retrieval/     Hybrid retrieve, rerank, compression, citations, extra-source merge
-src/sources/       SQLite catalog, sample ops API (`/kb`), lab MCP (`/mcp` + stdio)
-src/ingestion/     Cleanse, parent-child chunk, tables/figures, job queue
-src/api/           FastAPI: /query, /query/stream, /kb, /mcp, /ingest/jobs, /health, /metrics
+frontend/          React + Vite chat (SSE, citations, pipeline debug)
+src/graph/         Canonical graph v1 (+ shared nodes, evidence, verification)
+src/contracts/     Canonical state, evidence, verification, API response
+src/retrieval/     Hybrid retrieve, rerank, compression, citations, federation
+src/sources/       SQLite catalog, sample ops API (/kb), lab MCP
+src/ingestion/     Cleanse, parent-child chunk, document registry, job queue
+src/evaluation/    Shadow, canary, continuous eval, regression gates
+src/api/           FastAPI: /query, /query/stream, /ops/*, /feedback, /metrics
 src/security/      Prompt-injection detector
-src/cache/         Redis exact cache + in-process semantic cache
+src/cache/         Redis exact cache + semantic cache (pipeline-version keyed)
 monitoring/        Prometheus + Grafana provisioning
 data/sample_docs/  Sample corpus (rag.pdf)
-data/sources/      Seeded SQLite catalog (created at runtime; `*.db` gitignored)
-docs/              Concepts, roadmap, production, guardrails
+docs/              Architecture, API, evaluation, deployment (see DOCUMENTATION_MAP.md)
 ```
 
 ---
@@ -154,16 +155,21 @@ docs/              Concepts, roadmap, production, guardrails
 
 | Doc | For |
 |-----|-----|
-| [docs/QUICK_START.md](docs/QUICK_START.md) | Per-mode example queries and troubleshooting |
-| [docs/CONCEPTS.md](docs/CONCEPTS.md) | RAG vs agentic RAG |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | Phase-by-phase build |
+| [docs/DOCUMENTATION_MAP.md](docs/DOCUMENTATION_MAP.md) | **Start here** — authoritative doc index |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current production architecture |
+| [docs/LANGGRAPH.md](docs/LANGGRAPH.md) | Canonical graph nodes & state |
+| [docs/API.md](docs/API.md) | HTTP routes and schemas |
+| [docs/EVALUATION.md](docs/EVALUATION.md) | Metrics, shadow/canary, continuous eval |
+| [docs/QUICK_START.md](docs/QUICK_START.md) | Example queries and troubleshooting |
+| [docs/CONCEPTS.md](docs/CONCEPTS.md) | RAG vs agentic RAG concepts |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | Historical phase-by-phase build |
 | [docs/LANGCHAIN_STACK.md](docs/LANGCHAIN_STACK.md) | Module map |
 | [docs/PRODUCTION.md](docs/PRODUCTION.md) | Docker, cache, scaling |
-| [docs/GUARDRAILS.md](docs/GUARDRAILS.md) | Injection, rate limits, consensus grounding |
+| [docs/GUARDRAILS.md](docs/GUARDRAILS.md) | Injection, rate limits, quality |
 | [docs/PRIVACY_COMPLIANCE.md](docs/PRIVACY_COMPLIANCE.md) | PII/PHI policy |
 | [docs/LANGSMITH_TRACING.md](docs/LANGSMITH_TRACING.md) | Tracing |
-| [AGENTIC_RAG_DEEP_DIVE.md](AGENTIC_RAG_DEEP_DIVE.md) | Runtime architecture |
-| [LANGGRAPH_DEEP_DIVE.md](LANGGRAPH_DEEP_DIVE.md) | Graphs, nodes, edges |
+| [AGENTIC_RAG_DEEP_DIVE.md](AGENTIC_RAG_DEEP_DIVE.md) | **Historical** pre-canonical deep dive |
+| [LANGGRAPH_DEEP_DIVE.md](LANGGRAPH_DEEP_DIVE.md) | **Historical** seven-graph reference |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Pins, tests, PR loop |
 | [SECURITY.md](SECURITY.md) | Vulnerability reporting |
 
@@ -174,9 +180,11 @@ docs/              Concepts, roadmap, production, guardrails
 Default branch is **`dev`**. Promote to **`prod`** with a PR after CI is green.
 
 ```bash
-pytest -q --cov=src --cov-fail-under=55
+pytest -q --cov=src --cov-fail-under=60
 python -m src.evaluation.retrieval_metrics --offline   # CI golden set
+python -m src.evaluation.eval_gates                    # CI regression gates
 python -m src.evaluation.retrieval_metrics --gate      # live retrieval gate
+python -m src.evaluation.continuous_eval_cli           # scheduled continuous eval
 ```
 
 CI (`.github/workflows/ci.yml`) runs lint, pytest, the golden-set gate, a frontend production build, and a Docker build that fails if a `.env` is baked into the image.

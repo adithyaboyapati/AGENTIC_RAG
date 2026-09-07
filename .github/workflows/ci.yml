@@ -58,7 +58,7 @@ jobs:
         run: >
           pytest tests/ -q
           --cov=src --cov-report=term-missing --cov-report=xml
-          --cov-fail-under=55
+          --cov-fail-under=60
           --timeout=300
 
       - name: Import smoke test
@@ -70,6 +70,11 @@ jobs:
         env:
           OPENAI_API_KEY: test-key
         run: python -m src.evaluation.retrieval_metrics --offline
+
+      - name: Evaluation regression gates
+        env:
+          OPENAI_API_KEY: test-key
+        run: python -m src.evaluation.eval_gates
 
       - uses: actions/upload-artifact@v4
         if: always()

@@ -33,13 +33,17 @@ def build_cache_key(
     question: str,
     mode: str,
     rbac_context: RBACContext | None = None,
+    pipeline_version: str | None = None,
 ) -> str:
+    from src.evaluation.pipeline_version import cache_pipeline_version
+
     ctx = rbac_context or RBACContext()
     tenant = (ctx.tenant_id or "default").strip().lower()
     roles = ctx.roles_key()
     norm_q = normalize_question(question)
+    pipeline = pipeline_version or cache_pipeline_version()
     digest = hashlib.sha256(f"{norm_q}:{tenant}:{roles}".encode()).hexdigest()
-    return f"{_CACHE_PREFIX}:{mode}:{tenant}:{digest}"
+    return f"{_CACHE_PREFIX}:{pipeline}:{mode}:{tenant}:{digest}"
 
 
 def should_use_cache(
@@ -206,6 +210,10 @@ def get_cached_response(
     rbac_context: RBACContext | None = None,
 ) -> AgentResponse | None:
     """Return a cached AgentResponse (exact or semantic) or None on miss / error."""
+    from src.evaluation.shadow_context import is_observational_execution
+
+    if is_observational_execution():
+        return None
     ctx = rbac_context or RBACContext()
     client = _get_client()
 
@@ -250,6 +258,10 @@ def set_cached_response(
     rbac_context: RBACContext | None = None,
 ) -> bool:
     """Store a successful response in exact and semantic cache. Returns True if written."""
+    from src.evaluation.shadow_context import is_observational_execution
+
+    if is_observational_execution():
+        return False
     if not settings.cache_enabled:
         return False
     if getattr(response, "error_code", None):

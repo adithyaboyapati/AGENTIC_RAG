@@ -38,13 +38,16 @@ and [PRODUCTION.md](PRODUCTION.md).
 
 | Module | Purpose |
 |--------|---------|
-| `src/graph/router_graph.py` | Phase 2 — route → direct / retrieve / web |
-| `src/graph/crag_graph.py` | Phase 3 — retrieve → grade → retry loop → fallback |
-| `src/graph/decompose_graph.py` | Phase 4 — decompose → parallel retrieve (`Send`) → synthesize |
-| `src/graph/multi_hop_graph.py` | Phase 5 — sequential retrieval loop with reflection |
-| `src/graph/tools_graph.py` | Phase 6 — tool-calling agent (`llm.bind_tools()`) |
-| `src/graph/agent_graph.py` | Phase 7 — full orchestrator; reuses the phase graphs above as sub-nodes |
-| `src/graph/consensus_graph.py` | Phase 8 — retrieve → propose → challenge → judge; abstain / lexical overlap backstop |
+| `src/graph/canonical_graph.py` | **Production graph** — classify → strategy → retrieve/grade/rewrite loops → generate → verify → finalize |
+| `src/graph/shared_nodes.py` | Router invoke, direct answer, web search nodes |
+| `src/graph/evidence_management.py` | Evidence grading, deduplication, candidate processing |
+| `src/graph/context_builder.py` | Token-budgeted context construction for generation |
+| `src/graph/verification_engine.py` | LLM judge + deterministic citation checks; abstention path |
+| `src/graph/strategy_heuristics.py` | Strategy selection (single_hop, multi_hop, decompose, tools, …) |
+| `src/graph/canonical_state.py` | `CanonicalGraphState` — graph runtime state helpers |
+| `src/contracts/state.py` | `CanonicalAgentState` — API/runner state contract |
+
+**Removed (Phase 7):** legacy mode graphs (`router_graph`, `crag_graph`, `decompose_graph`, `multi_hop_graph`, `tools_graph`, `agent_graph`, `consensus_graph`) and the baseline RAG module. See [LEGACY_RETIREMENT_INVENTORY.md](./LEGACY_RETIREMENT_INVENTORY.md).
 
 ## Schemas & Response Building
 
@@ -62,7 +65,7 @@ OpenAI or LangChain directly — they gate what reaches/leaves the chains above.
 
 | Module | Purpose |
 |--------|---------|
-| `src/runner.py` | Single dispatch — privacy → input guardrails → optional Redis cache → cost budget → mode / `stream_agent` → follow-ups → output guardrails/privacy → cache write |
+| `src/runner.py` | Single dispatch — privacy → input guardrails → optional Redis cache → cost budget → **canonical graph** → follow-ups → output guardrails/privacy → cache write |
 | `src/streaming.py` | ContextVar emitter + `stream_text` / `run_graph_streaming` for progressive SSE |
 | `src/guardrails.py` | Input validation, output validation, rate limiting, token/cost budget, quality checks (`RateLimitError`) |
 | `src/privacy.py` | PII/PHI regex detection, redaction, policy |
@@ -81,19 +84,18 @@ OpenAI or LangChain directly — they gate what reaches/leaves the chains above.
 ## Pattern
 
 ```
-LangGraph StateGraph
+LangGraph StateGraph (canonical_graph.py)
   └── nodes call LangChain chains & tools
-  └── conditional edges for routing & loops
-  └── Annotated[list, operator.add] for step logs
+  └── conditional edges for routing, retry loops, verification
+  └── CanonicalAgentState with reducers for evidence, steps, citations
 
 src.runner.run_agent() / stream_agent()  ← single entry for CLI / API / UIs
   └── guardrails + privacy + optional Redis cache
-  └── dispatches to the StateGraph above
+  └── dispatches to ask_canonical() (deprecated mode strings map to strategies)
   └── token usage tracked via LangChain's get_openai_callback()
   └── follow-ups + citations assembled into AgentResponse
 ```
 
 Never call OpenAI or DuckDuckGo directly — always go through LangChain abstractions. Never
-call `run_agent`'s underlying mode functions (`ask_baseline`, `ask_crag`, …) directly from
-CLI/API/UI code — always go through `src.runner.run_agent()` or `stream_agent()`, or
-guardrails, privacy, and caching are silently skipped.
+call `ask_canonical` or graph nodes directly from CLI/API/UI code — always go through
+`src.runner.run_agent()` or `stream_agent()`, or guardrails, privacy, and caching are silently skipped.

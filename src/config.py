@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     retrieval_search_type: str = "hybrid"
     retrieval_mmr_lambda: float = 0.5
     retrieval_rrf_k: int = 60
+    # Skip in-process BM25 when the collection is larger than this — loading
+    # every chunk into RAM does not survive a production corpus.
+    bm25_max_docs: int = 20000
 
     # Cross-encoder reranking — after candidate retrieval, before top_k
     rerank_enabled: bool = True
@@ -206,11 +209,62 @@ class Settings(BaseSettings):
     ingest_max_concurrent_jobs: int = 2
     ingest_job_retention_seconds: int = 86400  # 24 hours
     webhook_secret: str = ""
+    # Comma-separated hostnames allowed for completion webhooks. Empty = any
+    # public hostname (private/reserved IPs are still blocked).
+    webhook_allowed_hosts: str = ""
+    # Comma-separated directories the ingest API may read. Empty = <repo>/data.
+    ingest_allowed_roots: str = ""
+    # Browser upload ceiling (POST /ingest/upload). PDFs only.
+    ingest_max_upload_mb: int = 20
+    ingest_max_upload_files: int = 5
+
+    # Client-supplied tenant_id / user_roles are ignored unless this is true.
+    # Production refuses to start with this enabled — identity must come from
+    # the server (token/key mapping), not the request body.
+    trust_client_rbac: bool = False
 
     # Phase 8: Multi-Agent Consensus & Adversarial Debate
     consensus_agent_enabled: bool = True  # runner rejects mode=consensus when false
     consensus_max_rounds: int = 1  # reserved; graph is a single propose→challenge→judge pass
     consensus_min_confidence: float = 0.80  # below this, a grounding caveat is appended
+
+    # Canonical verification (Phase 4)
+    canonical_verification_llm_enabled: bool = True
+    canonical_verification_faithfulness_min: float = 0.5
+    canonical_verification_relevance_min: float = 0.4
+
+    # OpenTelemetry (canonical workflow only; optional)
+    otel_enabled: bool = False
+    otel_service_name: str = "agentic-rag-canonical"
+
+    # Phase 5: Shadow traffic evaluation (disabled by default)
+    shadow_enabled: bool = False
+    shadow_sampling_rate: float = 0.0  # 0.0, 0.01, 0.05, 0.10, 0.25, 0.50, 1.0
+    shadow_max_workers: int = 2
+    shadow_store_raw_answers: bool = False
+    shadow_retention_days: int = 30
+    shadow_db_path: str = str(PROJECT_ROOT / "data" / "shadow_eval.db")
+
+    # Phase 5: Canary (disabled by default — never auto-enable)
+    canary_enabled: bool = False
+    canary_percent: float = 0.0
+    canary_strategy: str = "auto"
+    canary_stage: str = "0"  # 0 | 1 | 5 | 25 | 50 | 100
+    canary_allow_warn_responses: bool = False
+    shadow_minimum_samples: int = 30
+    canary_minimum_samples: int = 30
+    canary_minimum_observation_window_seconds: int = 3600
+    canary_max_error_rate: float = 0.05
+    canary_max_fallback_rate: float = 0.10
+    canary_max_p95_latency_delta_ms: float = 5000.0
+    canary_rollback_fallback_rate: float = 0.25
+    canary_rollback_p95_latency_delta_ms: float = 10000.0
+    canonical_primary: bool = True
+    legacy_fallback_enabled: bool = False
+    legacy_runtime_enabled: bool = False
+    legacy_removal_operator_approved: bool = True
+    legacy_retirement_max_fallback_rate: float = 0.05
+    legacy_retirement_min_canary_samples: int = 30
 
     # Multi-source retrieval (PDF vector store + SQLite + sample API + MCP)
     multi_source_enabled: bool = True
@@ -229,6 +283,22 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_key: str = ""
     supabase_chat_table: str = "chat_messages"
+
+    # User feedback (thumbs up/down + comment). Supabase when configured,
+    # else a local SQLite file so dev/CI still capture it.
+    feedback_enabled: bool = True
+    supabase_feedback_table: str = "answer_feedback"
+    feedback_db_path: str = str(PROJECT_ROOT / "data" / "feedback.db")
+    feedback_auto_regression: bool = True
+
+    # Phase 8: Continuous evaluation and optimization
+    continuous_eval_enabled: bool = True
+    eval_dataset_db_path: str = str(PROJECT_ROOT / "data" / "eval" / "dataset.db")
+    production_observations_db_path: str = str(PROJECT_ROOT / "data" / "eval" / "observations.db")
+    experiments_db_path: str = str(PROJECT_ROOT / "data" / "eval" / "experiments.db")
+    document_registry_db_path: str = str(PROJECT_ROOT / "data" / "eval" / "document_registry.db")
+    simple_model_id: str = ""  # optional cheaper model for simple routing policy
+    eval_scheduled_interval_hours: int = 24
 
     # Populated by validators; emitted once at startup rather than at import
     # time (logging is not configured yet when Settings is constructed).

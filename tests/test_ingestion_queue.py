@@ -85,7 +85,7 @@ def test_ingestion_queue_lifecycle_failure():
     assert finished is not None
     assert finished.status == IngestionJobStatus.FAILED
     assert finished.error is not None
-    assert "does not exist" in finished.error
+    assert "does not exist" in finished.error or "outside allowed" in finished.error
 
 
 def test_ingest_api_endpoints(monkeypatch):
@@ -93,7 +93,7 @@ def test_ingest_api_endpoints(monkeypatch):
     client = TestClient(app)
 
     with patch("src.ingestion.ingest.ingest_documents", return_value=5):
-        # 1. Submit Job
+        # 1. Submit Job — client tenant is ignored unless TRUST_CLIENT_RBAC
         pdf_path = str(PROJECT_ROOT / "data" / "sample_docs" / "rag.pdf")
         resp = client.post(
             "/ingest/jobs",
@@ -107,7 +107,7 @@ def test_ingest_api_endpoints(monkeypatch):
         data = resp.json()
         job_id = data["job_id"]
         assert job_id.startswith("job-")
-        assert data["tenant_id"] == "api_tenant"
+        assert data["tenant_id"] == "default"
 
         # 2. Poll Job
         time.sleep(0.2)
@@ -126,3 +126,11 @@ def test_ingest_api_endpoints(monkeypatch):
         # 4. Missing Job 404
         missing_resp = client.get("/ingest/jobs/nonexistent-job-id")
         assert missing_resp.status_code == 404
+
+        # 5. Path outside the allowlist is rejected before a job is created
+        denied = client.post(
+            "/ingest/jobs",
+            json={"source_paths": ["/etc/passwd"]},
+        )
+        assert denied.status_code == 400
+        assert "allowed" in denied.json()["detail"].lower() or "outside" in denied.json()["detail"].lower()

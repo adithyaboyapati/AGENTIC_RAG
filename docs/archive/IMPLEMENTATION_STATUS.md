@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — pre-canonical implementation checklist. Current: [../DOCUMENTATION_MAP.md](../DOCUMENTATION_MAP.md)
+
 # Implementation Status — Agentic RAG Project
 
 **Last Updated:** August 4, 2026  

@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — point-in-time milestone. Current docs: [../GUARDRAILS.md](../GUARDRAILS.md)
+
 # Guardrails Quick Reference
 
 **Status**: ✅ **ENABLED** — All guardrails automatically enforced

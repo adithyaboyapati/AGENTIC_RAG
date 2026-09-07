@@ -1,19 +1,37 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ApiError, checkHealth, checkReady, fetchModes, streamQuery } from '../api/client'
+import {
+  ApiError,
+  checkHealth,
+  checkReady,
+  fetchModes,
+  fetchRuntimeConfig,
+  streamQuery,
+  submitFeedback,
+} from '../api/client'
 import { MODES } from '../data/modes'
+import {
+  applyGenerationStarted,
+  applyLiveStep,
+  emptyPipeline,
+} from '../lib/pipeline'
 import {
   createEmptyChat,
   loadChatStore,
+  loadDebugMode,
   saveChatStore,
+  saveDebugMode,
   titleFromMessage,
 } from '../lib/chatStore'
 import type {
   AgentMode,
   ChatMessage,
   Citation,
+  FeedbackSubmission,
   HealthStatus,
   ModeMeta,
+  PipelinePayload,
   QueryResponse,
+  RuntimeConfig,
   StoredChat,
 } from '../types'
 
@@ -30,11 +48,13 @@ export function useChat() {
   const [chats, setChats] = useState<StoredChat[]>(() => sortChats(initial.chats))
   const [activeChatId, setActiveChatId] = useState(initial.activeChatId)
   const [useMemory, setUseMemory] = useState(true)
-  const [showTrace, setShowTrace] = useState(true)
+  const [debugMode, setDebugModeState] = useState(() => loadDebugMode())
   const [loadingChatId, setLoadingChatId] = useState<string | null>(null)
   const [liveSteps, setLiveSteps] = useState<string[]>([])
+  const [livePipeline, setLivePipeline] = useState<PipelinePayload | null>(null)
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
+  const [runtimeConfig, setRuntimeConfig] = useState<RuntimeConfig | null>(null)
   const [availableModes, setAvailableModes] = useState<ModeMeta[]>(MODES)
   const abortRef = useRef<AbortController | null>(null)
   const activeChatIdRef = useRef(activeChatId)
@@ -46,13 +66,17 @@ export function useChat() {
 
   const activeChat = chats.find((c) => c.id === activeChatId) ?? chats[0]
   const messages = activeChat?.messages ?? []
-  const mode: AgentMode = activeChat?.mode ?? 'agentic'
+  const mode: AgentMode = activeChat?.mode ?? 'canonical'
   const sessionId = activeChat?.sessionId ?? ''
 
-  // Persist whenever chats / active id change
   useEffect(() => {
     saveChatStore({ version: 1, activeChatId, chats })
   }, [chats, activeChatId])
+
+  const setDebugMode = useCallback((on: boolean) => {
+    setDebugModeState(on)
+    saveDebugMode(on)
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -108,6 +132,16 @@ export function useChat() {
       .catch(() => {
         /* keep static MODES */
       })
+    fetchRuntimeConfig()
+      .then((cfg) => {
+        if (!cancelled) {
+          setRuntimeConfig(cfg)
+          if (cfg.memory_enabled === false) setUseMemory(false)
+        }
+      })
+      .catch(() => {
+        /* optional */
+      })
     return () => {
       cancelled = true
     }
@@ -116,9 +150,7 @@ export function useChat() {
   const updateActiveChat = useCallback((updater: (chat: StoredChat) => StoredChat) => {
     setChats((prev) => {
       const id = activeChatIdRef.current
-      return sortChats(
-        prev.map((c) => (c.id === id ? updater({ ...c, updatedAt: Date.now() }) : c)),
-      )
+      return sortChats(prev.map((c) => (c.id === id ? updater({ ...c, updatedAt: Date.now() }) : c)))
     })
   }, [])
 
@@ -135,7 +167,6 @@ export function useChat() {
   }, [])
 
   const newChat = useCallback(() => {
-    // Reuse an existing empty "New chat" if one is already open
     setChats((prev) => {
       const empty = prev.find((c) => c.messages.length === 0 && c.title === 'New chat')
       if (empty) {
@@ -181,6 +212,7 @@ export function useChat() {
       sessionId: crypto.randomUUID().replace(/-/g, ''),
     }))
     setLiveSteps([])
+    setLivePipeline(null)
   }, [updateActiveChat])
 
   const sendMessage = useCallback(
@@ -194,8 +226,6 @@ export function useChat() {
 
       const sendSessionId = current.sessionId
       const sendMode = current.mode
-      // Prior turns only. Server packs them compactly:
-      // last 3 exchanges = Q + answer truncated to 500 chars; older = queries only.
       const priorHistory = useMemory
         ? current.messages
             .filter((m) => !m.error && (m.role === 'user' || m.role === 'assistant'))
@@ -230,6 +260,7 @@ export function useChat() {
 
       setLoadingChatId(chatIdAtSend)
       setLiveSteps([])
+      setLivePipeline(emptyPipeline(trimmed, sendMode))
 
       const assistantId = newId()
       let answerText = ''
@@ -238,8 +269,15 @@ export function useChat() {
       let citations: Citation[] = []
       let streamSteps: string[] = []
       let streamError: string | null = null
+      let pipeline: PipelinePayload | null = emptyPipeline(trimmed, sendMode)
+      let sawTokens = false
 
-      const upsertAssistant = (content: string, done = false, meta?: Partial<QueryResponse>) => {
+      const upsertAssistant = (
+        content: string,
+        done = false,
+        meta?: Partial<QueryResponse>,
+        extras?: { pipeline?: PipelinePayload | null; streaming?: boolean },
+      ) => {
         setChats((prev) =>
           sortChats(
             prev.map((c) => {
@@ -249,7 +287,9 @@ export function useChat() {
                 id: assistantId,
                 role: 'assistant',
                 content,
+                streaming: extras?.streaming ?? !done,
                 followUps: done ? followUps : undefined,
+                pipeline: extras?.pipeline ?? pipeline,
                 trace: done
                   ? {
                       question: trimmed,
@@ -263,6 +303,10 @@ export function useChat() {
                       follow_ups: followUps,
                       latency_ms: meta?.latency_ms ?? 0,
                       session_id: meta?.session_id ?? null,
+                      tenant_id: meta?.tenant_id,
+                      consensus_score: meta?.consensus_score,
+                      critique_summary: meta?.critique_summary,
+                      error_code: meta?.error_code,
                     }
                   : null,
               }
@@ -289,17 +333,26 @@ export function useChat() {
           {
             onStep: (step) => {
               streamSteps = [...streamSteps, step]
+              pipeline = applyLiveStep(pipeline ?? emptyPipeline(trimmed, sendMode), step)
               if (activeChatIdRef.current === chatIdAtSend) {
                 setLiveSteps(streamSteps)
+                setLivePipeline(pipeline)
               }
             },
             onToken: (token) => {
               answerText += token
-              upsertAssistant(answerText)
+              if (!sawTokens) {
+                sawTokens = true
+                pipeline = applyGenerationStarted(pipeline ?? emptyPipeline(trimmed, sendMode))
+                if (activeChatIdRef.current === chatIdAtSend) {
+                  setLivePipeline(pipeline)
+                }
+              }
+              upsertAssistant(answerText, false, undefined, { streaming: true })
             },
             onAnswer: (answer) => {
               answerText = answer
-              upsertAssistant(answerText)
+              upsertAssistant(answerText, false, undefined, { streaming: true })
             },
             onFollowUps: (next) => {
               followUps = next
@@ -308,16 +361,28 @@ export function useChat() {
               sources = nextSources
               citations = nextCitations
             },
+            onPipeline: (next) => {
+              pipeline = next
+              if (activeChatIdRef.current === chatIdAtSend) {
+                setLivePipeline(next)
+              }
+            },
             onDone: (meta) => {
               if (meta.steps?.length) streamSteps = meta.steps
-              upsertAssistant(answerText, true, {
-                mode: meta.mode ?? sendMode,
-                route: meta.route ?? null,
-                route_reason: meta.route_reason ?? null,
-                steps: streamSteps,
-                latency_ms: meta.latency_ms,
-                session_id: meta.session_id,
-              })
+              upsertAssistant(
+                answerText,
+                true,
+                {
+                  mode: meta.mode ?? sendMode,
+                  route: meta.route ?? null,
+                  route_reason: meta.route_reason ?? null,
+                  steps: streamSteps,
+                  latency_ms: meta.latency_ms,
+                  session_id: meta.session_id,
+                  error_code: meta.error_code,
+                },
+                { pipeline, streaming: false },
+              )
               setChats((prev) =>
                 sortChats(
                   prev.map((c) => {
@@ -363,6 +428,7 @@ export function useChat() {
                     content: message,
                     error: true,
                     trace: null,
+                    pipeline,
                   },
                 ],
                 updatedAt: Date.now(),
@@ -388,6 +454,63 @@ export function useChat() {
     setLiveSteps([])
   }, [])
 
+  const rateMessage = useCallback(
+    async (messageId: string, submission: FeedbackSubmission) => {
+      const chat = chats.find((c) => c.id === activeChatIdRef.current)
+      if (!chat) return
+      const assistant = chat.messages.find((m) => m.id === messageId)
+      const user = [...chat.messages].reverse().find((m) => m.role === 'user' && m.id !== messageId)
+      if (!assistant || assistant.role !== 'assistant' || assistant.error) return
+
+      const patch = (status: 'pending' | 'saved' | 'failed') =>
+        setChats((prev) =>
+          prev.map((c) =>
+            c.id !== chat.id
+              ? c
+              : {
+                  ...c,
+                  messages: c.messages.map((m) =>
+                    m.id === messageId
+                      ? {
+                          ...m,
+                          feedback: {
+                            rating: submission.rating,
+                            status,
+                            comment: submission.comment,
+                            categories: submission.categories,
+                          },
+                        }
+                      : m,
+                  ),
+                },
+          ),
+        )
+
+      patch('pending')
+      try {
+        await submitFeedback({
+          rating: submission.rating,
+          question: user?.content || assistant.trace?.question || '',
+          answer: assistant.content,
+          mode: assistant.trace?.mode || chat.mode,
+          comment: submission.comment,
+          categories: submission.categories,
+          sessionId: chat.sessionId,
+          messageId,
+          route: assistant.trace?.route,
+          sources: assistant.trace?.sources,
+          citations: assistant.trace?.citations,
+          latencyMs: assistant.trace?.latency_ms,
+          consensusScore: assistant.trace?.consensus_score,
+        })
+        patch('saved')
+      } catch {
+        patch('failed')
+      }
+    },
+    [chats],
+  )
+
   return {
     chats,
     activeChatId,
@@ -398,13 +521,15 @@ export function useChat() {
     availableModes,
     useMemory,
     setUseMemory,
-    showTrace,
-    setShowTrace,
+    debugMode,
+    setDebugMode,
     sessionId,
     isLoading,
     liveSteps,
+    livePipeline,
     health,
     healthError,
+    runtimeConfig,
     selectChat,
     newChat,
     deleteChat,
@@ -412,5 +537,6 @@ export function useChat() {
     clearChat,
     sendMessage,
     stopGeneration,
+    rateMessage,
   }
 }

@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — point-in-time milestone. Current: [../LANGSMITH_TRACING.md](../LANGSMITH_TRACING.md)
+
 # LangSmith Tracing Integration — COMPLETE ✅
 
 **Date**: August 5, 2026  

@@ -1,5 +1,7 @@
 # 🧠 AGENTIC RAG — Comprehensive Architecture & Reverse Engineering Deep Dive
 
+> **⚠️ Historical document (pre-Phase 7 canonical consolidation).** Describes the **removed** eight-mode / multi-graph runtime. **Current production:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/LANGGRAPH.md](docs/LANGGRAPH.md) · [docs/DOCUMENTATION_MAP.md](docs/DOCUMENTATION_MAP.md)
+
 > **Document Type**: Master Technical Architecture & Runtime Execution Reference  
 > **Repository**: `Agentic_RAG`  
 > **Last reviewed against source**: 2026-09-01  
@@ -471,10 +473,10 @@ STAGE 5: TOOLS SUBGRAPH + HYBRID RETRIEVAL
     i.   Dense: Chroma over-fetch candidate_k=20 (×2 if rbac_context is not None).
     ii.  Sparse: BM25 rebuilt when collection count changes (thread lock).
     iii. RRF: score(d) = Σ 1/(rrf_k + rank + 1) with rrf_k=60.
-    iv.  `_filter_rbac(docs, ctx)` — graphs currently call retrieve(query) without
-         passing the request RBACContext, so the default ctx is tenant=default,
-         roles=["public"]. Request tenant_id/user_roles still isolate cache keys
-         and stamp AgentResponse.tenant_id.
+    iv.  Tenant `where` filter on Chroma, then `_filter_rbac` for roles/classification.
+         `run_agent` / `stream_agent` bind `RBACContext` on a ContextVar so every
+         graph and tool retrieve inherits it. Production ignores client-supplied
+         tenant/roles unless `TRUST_CLIENT_RBAC` is on (refused at boot).
     v.   Rerank: NVIDIA NeMo (circuit-breaker protected) or FlashRank → pool then top_k=6.
     vi.  Parent expansion from data/parent_store.json (PARENT_MAX_CHARS=3500).
     vii. `format_docs(docs, query=...)` optionally `compress_documents` (keep 65% of

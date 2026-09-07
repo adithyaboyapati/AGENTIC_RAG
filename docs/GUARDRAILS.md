@@ -34,7 +34,7 @@ invoked for the user's actual question:
 3. **Input guardrails** — length, word count, credential-pattern detection (`src/guardrails.py`).
 4. **Query-rate check** — process-wide queries/minute budget.
 5. **Token-budget check** — process-wide tokens/minute and tokens/hour budget.
-6. **Multi-Tenant Document RBAC** — filters retrieved documents by tenant ID and authorized user access groups.
+6. **Document RBAC** — Chroma tenant `where` filter plus role/classification post-filter. Production ignores client-supplied `tenant_id` / `user_roles` (`TRUST_CLIENT_RBAC` is refused at boot). Retrieved chunks are also scanned for indirect injection.
 7. Dispatch to the selected mode (with Node-Level Output Gates and Circuit Breakers), **tracking actual token usage** via LangChain's OpenAI callback.
 8. **Output guardrails** — length, presence of sources, citation extraction.
 9. **Prompt Leakage & Indirect Injection Output Scan** — verifies no system prompt leakage or markdown image exfiltration.
@@ -49,7 +49,7 @@ from src.guardrails import RateLimitError
 from src.runner import run_agent
 
 try:
-    result = run_agent(question, mode="crag")
+    result = run_agent(question, mode="canonical")
 except RateLimitError as e:
     ...  # 429 — back off and retry later
 except ValueError as e:
@@ -338,7 +338,7 @@ valid, violations = QualityGuardrails.validate(
 )
 ```
 
-Run `python -m src.evaluation.evaluate_all_modes` to score all 8 modes this way.
+Run `python -m src.evaluation.eval_gates` or `python -m src.evaluation.continuous_eval_cli` for production regression checks. Optional offline scoring: `python -m src.evaluation.evaluate_all_modes` (deprecated mode aliases still route through canonical).
 
 ### Online Mode (Optional — `QUALITY_GUARDRAILS_ENABLED=true`)
 
@@ -357,19 +357,15 @@ QUALITY_MIN_CONTEXT_PRECISION=0.5
 quality-critical applications (customer support) where latency is less critical than answer
 correctness.
 
-### Consensus-mode grounding (always on for `mode=consensus`)
+### Canonical verification (always on)
 
-Quality guardrails above are optional extra LLM judges. Consensus has **deterministic**
-grounding checks in `src/graph/consensus_graph.py`:
+The canonical graph runs **verification before finalize** (`src/graph/verification_engine.py`):
 
-- Debate is skipped when retrieval returns no documents.
-- Prompts require abstention when chunks lack the asked comparison / example / metric.
-- After the judge writes, sentences with weak lexical overlap vs the context are dropped.
-- `consensus_score` defaults to **0.50** if unstated (not 0.92), and is capped after unsupported flags.
-- Below `CONSENSUS_MIN_CONFIDENCE` a caveat is appended. Follow-ups are skipped on abstention.
+- LLM judge for faithfulness/relevance (when `canonical_verification_llm_enabled=true`)
+- Deterministic citation overlap and abstention on weak grounding
+- Outcomes: `PASS`, `WARN`, `FAIL` — may trigger rewrite or safe abstention
 
-This is still not span-level citation verification. Enable `QUALITY_GUARDRAILS_ENABLED` if you
-also want an LLM faithfulness score on the live path.
+This is separate from optional **quality guardrails** (`QUALITY_GUARDRAILS_ENABLED`) which add an extra LLM judge on every request.
 
 ### Golden Retrieval Evaluation
 
@@ -429,7 +425,7 @@ Key regression tests to be aware of:
 | **Process rate/token budget** | Aggregate cost overruns | Blocks (`RateLimitError`) |
 | **LLM timeout/max_tokens** | Runaway/abandoned calls still billing | Hard cap on OpenAI (and Groq fallback) client |
 | **LLM fallback** | OpenAI outage / quota | Retries on Groq when keyed |
-| **Quality** (offline) | Hallucinations, weak retrieval | `evaluate_all_modes` + golden retrieval metrics |
+| **Quality** (offline) | Hallucinations, weak retrieval | `eval_gates`, `continuous_eval_cli`, golden retrieval metrics |
 | **Quality** (online, optional) | Poor answer quality per LLM judge | Blocks/warns when `QUALITY_GUARDRAILS_ENABLED=true` |
 
 **Enforced identically in CLI, API, React UI, and Streamlit** — all call through

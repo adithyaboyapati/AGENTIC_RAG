@@ -11,6 +11,7 @@ from langchain_core.vectorstores import VectorStoreRetriever
 
 from src.config import settings
 from src.ingestion.ingest import get_vector_store
+from src.retrieval.context import current_rbac
 from src.retrieval.reranker import rerank_documents
 from src.schemas import RBACContext
 
@@ -23,6 +24,8 @@ logger = logging.getLogger(__name__)
 _bm25_lock = threading.Lock()
 _bm25_retriever = None
 _bm25_doc_count: int | None = None
+_bm25_count_checked_at: float = 0.0
+_BM25_COUNT_TTL_SECONDS = 30.0
 
 
 def get_retriever(top_k: int | None = None) -> VectorStoreRetriever:
@@ -42,11 +45,36 @@ def get_retriever(top_k: int | None = None) -> VectorStoreRetriever:
 
 
 def _collection_count() -> int:
+    global _bm25_doc_count, _bm25_count_checked_at
+    import time
+
+    now = time.monotonic()
+    if (
+        _bm25_doc_count is not None
+        and _bm25_retriever is not None
+        and now - _bm25_count_checked_at < _BM25_COUNT_TTL_SECONDS
+    ):
+        return _bm25_doc_count
     store = get_vector_store()
     try:
-        return store._collection.count()  # noqa: SLF001 — chroma client
+        count = store._collection.count()  # noqa: SLF001 — chroma client
     except Exception:
-        return 0
+        count = 0
+    _bm25_count_checked_at = now
+    return count
+
+
+def chroma_tenant_filter(ctx: RBACContext) -> dict:
+    """Chroma ``where`` clause so other tenants never enter the ANN pool."""
+    tenant = (ctx.tenant_id or "default").strip().lower()
+    return {
+        "$or": [
+            {"tenant_id": tenant},
+            {"tenant_id": "global"},
+            {"tenant_id": "public"},
+            {"tenant_id": "*"},
+        ]
+    }
 
 
 def _load_corpus_documents() -> list[Document]:
@@ -70,6 +98,13 @@ def _get_bm25_retriever(candidate_k: int):
     """Lazy BM25 index over the Chroma corpus (rebuilt when count changes)."""
     global _bm25_retriever, _bm25_doc_count
     count = _collection_count()
+    if count > max(1, int(settings.bm25_max_docs)):
+        logger.warning(
+            "Skipping BM25 — collection has %d chunks (bm25_max_docs=%d); using dense only",
+            count,
+            settings.bm25_max_docs,
+        )
+        return None
     with _bm25_lock:
         if _bm25_retriever is not None and _bm25_doc_count == count:
             _bm25_retriever.k = candidate_k
@@ -126,7 +161,7 @@ def _rrf_fuse(ranked_lists: list[list[Document]], rrf_k: int) -> list[Document]:
 
 def _filter_rbac(docs: list[Document], rbac_context: RBACContext | None) -> list[Document]:
     """Filter candidate documents based on tenant and role access permissions."""
-    if not docs or rbac_context is None:
+    if not docs or rbac_context is None or not settings.rbac_enabled:
         return docs
     filtered: list[Document] = []
     for doc in docs:
@@ -138,6 +173,39 @@ def _filter_rbac(docs: list[Document], rbac_context: RBACContext | None) -> list
     return filtered
 
 
+def _sanitize_retrieved(docs: list[Document]) -> list[Document]:
+    """Drop or defang chunks that carry indirect prompt injection."""
+    if not docs:
+        return docs
+    if not (
+        settings.injection_guardrails_enabled
+        and settings.indirect_injection_protection_enabled
+    ):
+        return docs
+    try:
+        from src.resilience.node_gate import check_indirect_injection
+        from src.security.injection import sanitize_untrusted_context
+    except Exception:
+        return docs
+
+    clean: list[Document] = []
+    dropped = 0
+    for i, doc in enumerate(docs):
+        content = getattr(doc, "page_content", "") or ""
+        gate = check_indirect_injection(content, f"document[{i}]")
+        if gate.ok:
+            clean.append(doc)
+            continue
+        text, _findings = sanitize_untrusted_context(content)
+        if settings.injection_guardrails_mode == "block":
+            dropped += 1
+            continue
+        clean.append(Document(page_content=text, metadata=dict(doc.metadata)))
+    if dropped:
+        logger.warning("Dropped %d retrieved chunk(s) for indirect injection", dropped)
+    return clean
+
+
 def _dense_retrieve(
     query: str,
     candidate_k: int,
@@ -146,19 +214,31 @@ def _dense_retrieve(
 ) -> list[Document]:
     store = get_vector_store()
     # Over-fetch if RBAC is active so post-filtering still yields sufficient candidates
-    fetch_k = candidate_k * 2 if rbac_context is not None else candidate_k
+    use_rbac = settings.rbac_enabled and rbac_context is not None
+    fetch_k = candidate_k * 2 if use_rbac else candidate_k
+    where = chroma_tenant_filter(rbac_context) if use_rbac else None
 
-    if search_type == "mmr":
-        docs = store.max_marginal_relevance_search(
+    def _mmr(*, flt):
+        return store.max_marginal_relevance_search(
             query,
             k=fetch_k,
             fetch_k=max(fetch_k, settings.retrieval_candidate_k),
             lambda_mult=settings.retrieval_mmr_lambda,
+            **({"filter": flt} if flt else {}),
         )
+
+    if search_type == "mmr":
+        try:
+            docs = _mmr(flt=where)
+        except Exception:
+            docs = _mmr(flt=None)
         return _filter_rbac(docs, rbac_context)[:candidate_k]
 
     try:
-        pairs = store.similarity_search_with_relevance_scores(query, k=fetch_k)
+        kwargs = {"k": fetch_k}
+        if where:
+            kwargs["filter"] = where
+        pairs = store.similarity_search_with_relevance_scores(query, **kwargs)
         docs: list[Document] = []
         for doc, score in pairs:
             meta = dict(doc.metadata)
@@ -166,7 +246,10 @@ def _dense_retrieve(
             docs.append(Document(page_content=doc.page_content, metadata=meta))
         return _filter_rbac(docs, rbac_context)[:candidate_k]
     except Exception:
-        docs = store.similarity_search(query, k=fetch_k)
+        try:
+            docs = store.similarity_search(query, k=fetch_k, **({"filter": where} if where else {}))
+        except Exception:
+            docs = store.similarity_search(query, k=fetch_k)
         return _filter_rbac(docs, rbac_context)[:candidate_k]
 
 
@@ -193,6 +276,7 @@ def _attach_extra_sources(
     query: str,
     docs: list[Document],
     include_extra: bool | None,
+    rbac_context: RBACContext | None = None,
 ) -> list[Document]:
     """Prepend database / API / MCP hits when multi-source retrieval is on."""
     use_extra = settings.multi_source_enabled if include_extra is None else include_extra
@@ -200,7 +284,9 @@ def _attach_extra_sources(
         return docs
     from src.sources.federation import merge_with_pdf, search_extra_sources
 
-    extra = search_extra_sources(query)
+    extra = search_extra_sources(query, rbac_context=rbac_context)
+    if rbac_context is not None:
+        extra = _filter_rbac(extra, rbac_context)
     return merge_with_pdf(docs, extra)
 
 
@@ -219,9 +305,7 @@ def retrieve(
       4. Optional parent-section expansion
       5. Optional extra sources (SQLite catalog, sample API, lab MCP)
     """
-    from src.schemas import RBACContext
-
-    ctx = rbac_context or RBACContext()
+    ctx = rbac_context if isinstance(rbac_context, RBACContext) else current_rbac()
     final_k = top_k or settings.retrieval_top_k
     candidate_k = max(final_k, settings.retrieval_candidate_k)
     mode = (settings.retrieval_search_type or "similarity").lower()
@@ -257,16 +341,16 @@ def retrieve(
         expanded = expand_children_to_parents(docs)[:final_k]
         expanded = _filter_rbac(expanded, ctx)
         before_extra = expanded
-        expanded = _attach_extra_sources(query, expanded, include_extra)
+        expanded = _attach_extra_sources(query, expanded, include_extra, ctx)
         extra_bit = "+sources" if expanded is not before_extra else ""
         _log_retrieval(query, expanded, f"{mode_label}+parent{extra_bit}")
-        return expanded
+        return _sanitize_retrieved(expanded)
 
     docs = docs[:final_k]
-    merged = _attach_extra_sources(query, docs, include_extra)
+    merged = _attach_extra_sources(query, docs, include_extra, ctx)
     extra_bit = "+sources" if merged is not docs else ""
     _log_retrieval(query, merged, f"{mode_label}{extra_bit}")
-    return merged
+    return _sanitize_retrieved(merged)
 
 
 def format_docs(docs: list[Document], query: str | None = None) -> str:
@@ -308,7 +392,8 @@ def format_docs(docs: list[Document], query: str | None = None) -> str:
 
 def invalidate_bm25_cache() -> None:
     """Call after ingest/reset so BM25 rebuilds on next retrieve."""
-    global _bm25_retriever, _bm25_doc_count
+    global _bm25_retriever, _bm25_doc_count, _bm25_count_checked_at
     with _bm25_lock:
         _bm25_retriever = None
         _bm25_doc_count = None
+        _bm25_count_checked_at = 0.0

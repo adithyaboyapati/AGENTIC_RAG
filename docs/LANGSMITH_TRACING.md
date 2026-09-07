@@ -217,12 +217,11 @@ print(f"Endpoint: {settings.langsmith_endpoint}")
 
 ### 3. **Compare Mode Performance**
 
-Run same question through different modes:
+Run the same question with canonical mode (and optionally deprecated aliases for comparison):
 
 ```bash
-python -m src.cli ask "What is Self-RAG?" --mode baseline
-python -m src.cli ask "What is Self-RAG?" --mode crag
-python -m src.cli ask "What is Self-RAG?" --mode agentic
+python -m src.cli ask "What is Self-RAG?" --mode canonical
+python -m src.cli ask "What is Self-RAG?" --mode crag   # deprecated alias → canonical strategy
 ```
 
 Then in LangSmith, compare traces side-by-side:

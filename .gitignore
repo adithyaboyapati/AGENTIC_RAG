@@ -14,10 +14,15 @@ venv/
 data/chroma_db/
 data/parent_store.json
 data/flashrank_cache/
+data/uploads/
 data/sources/*.db
 data/sources/*.db-journal
 data/sources/*.db-wal
 data/sources/*.db-shm
+# Local feedback fallback store + export triage queue
+data/feedback.db*
+data/eval/feedback_regressions.json
+data/eval/*.db
 
 # IDE
 .idea/
@@ -40,6 +45,7 @@ coverage.xml
 htmlcov/
 
 # Frontend
+node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/.env

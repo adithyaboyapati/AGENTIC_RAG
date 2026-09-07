@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — pre-canonical completion report. Current: [../ARCHITECTURE.md](../ARCHITECTURE.md)
+
 # 🎉 Agentic RAG Project — COMPLETE
 
 **Date**: August 5, 2026  

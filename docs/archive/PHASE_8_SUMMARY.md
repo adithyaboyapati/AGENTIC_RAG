@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — refers to old "Phase 8 = consensus agent". Current Phase 8: [../PHASE8_CONTINUOUS_EVAL.md](../PHASE8_CONTINUOUS_EVAL.md)
+
 # Phase 8: RAGAS Evaluation — Complete Summary
 
 **Date Completed**: August 5, 2026  

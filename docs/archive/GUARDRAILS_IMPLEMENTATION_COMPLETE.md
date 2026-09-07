@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — point-in-time milestone from pre-canonical era. Current docs: [../DOCUMENTATION_MAP.md](../DOCUMENTATION_MAP.md) · [../GUARDRAILS.md](../GUARDRAILS.md)
+
 # Production Guardrails — Implementation Complete ✅
 
 **Date**: August 5, 2026  

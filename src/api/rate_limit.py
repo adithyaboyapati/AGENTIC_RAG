@@ -62,16 +62,29 @@ def _prune_history(now: float) -> None:
         )
 
 
-def _client_id(request: Request, api_key: str | None) -> str:
-    if api_key:
-        return f"key:{api_key}"
+def _peer_ip(request: Request) -> str:
     if settings.trust_proxy_headers:
         forwarded = (request.headers.get("x-forwarded-for") or "").split(",")[0].strip()
         if forwarded:
-            return f"ip:{forwarded}"
+            return forwarded
     if request.client:
-        return f"ip:{request.client.host}"
-    return "ip:unknown"
+        return request.client.host
+    return "unknown"
+
+
+def _client_id(request: Request, api_key: str | None) -> str:
+    """Isolate callers even when nginx injects one shared API key.
+
+    Key-only buckets collapse every browser user onto the same 20 req/min
+    quota. Always fold in the peer IP; hash the key so it is not stored raw.
+    """
+    ip = _peer_ip(request)
+    if api_key:
+        import hashlib
+
+        key_fp = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:16]
+        return f"key:{key_fp}:ip:{ip}"
+    return f"ip:{ip}"
 
 
 def _use_redis_backend() -> bool:

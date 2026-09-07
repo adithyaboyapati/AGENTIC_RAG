@@ -17,7 +17,6 @@ import time
 import uuid
 from dataclasses import asdict, dataclass, field
 from enum import Enum
-from pathlib import Path
 from typing import Any
 
 from src.config import settings
@@ -85,10 +84,14 @@ def _dispatch_webhook(job: IngestionJob) -> None:
         )
 
     try:
+        from src.security.ssrf import validate_webhook_url
         import urllib.request
 
+        safe_url = validate_webhook_url(job.webhook_url)
+        if not safe_url:
+            return
         req = urllib.request.Request(
-            job.webhook_url,
+            safe_url,
             data=raw_payload,
             headers=headers,
             method="POST",
@@ -120,6 +123,16 @@ class IngestionQueue:
             max_workers=max_workers,
             thread_name_prefix="ingest-worker",
         )
+        try:
+            from src.ingestion.job_store import get_job_store
+
+            self._store = get_job_store()
+        except Exception:
+            self._store = None
+
+    def _persist(self, job: IngestionJob) -> None:
+        if self._store is not None:
+            self._store.save(job)
 
     def submit_job(
         self,
@@ -145,6 +158,7 @@ class IngestionQueue:
             self._cleanup_old_jobs()
             self._jobs[job_id] = job
 
+        self._persist(job)
         logger.info("Ingestion job queued: %s (%d file(s))", job_id, len(source_paths))
         self._executor.submit(self._run_job, job_id)
         return job
@@ -152,12 +166,27 @@ class IngestionQueue:
     def get_job(self, job_id: str) -> IngestionJob | None:
         """Retrieve job by ID."""
         with self._lock:
-            return self._jobs.get(job_id)
+            job = self._jobs.get(job_id)
+        if job is not None:
+            return job
+        if self._store is not None:
+            restored = self._store.get(job_id)
+            if restored is not None:
+                with self._lock:
+                    self._jobs[job_id] = restored
+                return restored
+        return None
 
     def list_jobs(self, limit: int = 50) -> list[IngestionJob]:
         """List recent jobs sorted by creation time descending."""
         with self._lock:
             jobs = list(self._jobs.values())
+        if self._store is not None:
+            stored = self._store.list_recent(limit=limit)
+            seen = {j.job_id for j in jobs}
+            for job in stored:
+                if job.job_id not in seen:
+                    jobs.append(job)
         jobs.sort(key=lambda j: j.created_at, reverse=True)
         return jobs[:limit]
 
@@ -181,6 +210,7 @@ class IngestionQueue:
                 return
             job.status = IngestionJobStatus.PROCESSING
             job.progress_pct = 5.0
+            self._persist(job)
 
         start_time = time.time()
         total_chunks = 0
@@ -189,8 +219,10 @@ class IngestionQueue:
             from src.ingestion.ingest import ingest_documents
 
             # Process files
+            from src.security.paths import resolve_ingest_path
+
             for idx, path_str in enumerate(job.source_paths, 1):
-                p = Path(path_str)
+                p = resolve_ingest_path(path_str)
                 if not p.exists():
                     raise FileNotFoundError(f"Source path does not exist: {path_str}")
 
@@ -209,20 +241,21 @@ class IngestionQueue:
                     job.progress_pct = round(
                         5.0 + (90.0 * (idx / max(1, job.total_files))), 1
                     )
+                    self._persist(job)
 
-            # Invalidate caches so new docs are immediately retrievable
             try:
-                from src.retrieval.retriever import invalidate_bm25_cache
+                from src.ingestion.ingest import _invalidate_retrieval_caches
 
-                invalidate_bm25_cache()
+                _invalidate_retrieval_caches()
             except Exception:
-                pass
+                logger.warning("Post-ingest cache invalidation failed", exc_info=True)
 
             duration = time.time() - start_time
             with self._lock:
                 job.status = IngestionJobStatus.COMPLETED
                 job.progress_pct = 100.0
                 job.completed_at = time.time()
+                self._persist(job)
 
             try:
                 from src.api.metrics import (
@@ -251,6 +284,7 @@ class IngestionQueue:
                 job.status = IngestionJobStatus.FAILED
                 job.error = str(exc)
                 job.completed_at = time.time()
+                self._persist(job)
 
             try:
                 from src.api.metrics import record_ingest_duration, record_ingest_job

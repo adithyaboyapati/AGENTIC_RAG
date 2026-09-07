@@ -1,5 +1,7 @@
 # RAG vs Agentic RAG — Complete Conceptual Guide
 
+**Current implementation:** one canonical Agentic RAG graph ([ARCHITECTURE.md](./ARCHITECTURE.md), [LANGGRAPH.md](./LANGGRAPH.md)). The mode progression below explains *why* the system evolved — the production UI/API no longer exposes eight separate graphs.
+
 This document demystifies Agentic RAG. Read it before writing code.
 
 ---
@@ -335,9 +337,11 @@ Follow-ups:
 These are generated from the original answer + source snippets, so they stay relevant
 and grounded. No more random suggestions.
 
-### 7. Multi-Agent Consensus & Adversarial Debate (Phase 8)
+### 7. Multi-Agent Consensus & Adversarial Debate (Historical — learning Phase 8)
 
-When a single generator might over-complete an answer, consensus runs three agents over the **same retrieved context**:
+> **Historical:** The standalone `consensus` graph was **removed in Phase 7**. Production uses the **canonical graph** with a `verify` node (`src/graph/verification_engine.py`) instead of a three-agent debate.
+
+When a single generator might over-complete an answer, the original consensus mode ran three agents over the **same retrieved context**:
 
 ```
 User Query ──▶ [Retrieve & Compress]
@@ -356,7 +360,7 @@ User Query ──▶ [Retrieve & Compress]
          [Lexical backstop] ──▶ Drops sentences with weak overlap vs context
 ```
 
-Use `--mode consensus` (CLI, API, or UI). This **reduces** fluency-driven hallucination; it is not span-level proof that every token appears in a chunk. Confidence is a grounding self-score (default **0.50** if the judge omits it, capped after flags/dropped sentences). Below `CONSENSUS_MIN_CONFIDENCE` (default 0.80) a caveat is appended. Follow-ups are skipped on abstentions.
+The deprecated `--mode consensus` alias now maps to a canonical strategy. For current behavior, use `--mode canonical` and inspect the verification step in traces. See [LANGGRAPH.md](./LANGGRAPH.md).
 
 ### 8. Multimodal Ingestion & Dynamic Context Compression
 
@@ -367,7 +371,7 @@ Real enterprise documents contain rich tabular matrices and visual diagrams:
 ### 9. Semantic Vector Caching & Tenant Isolation
 
 - **Vector Semantic Caching** calculates cosine similarity ($\ge 0.94$) against embedding queries, returning sub-millisecond cached responses without LLM spend.
-- **Document RBAC** strictly isolates data per tenant and user role at both vector and BM25 sparse retrieval stages.
+- **Document RBAC** isolates tenants at the Chroma `where` filter and again after BM25/RRF. Roles and classification are post-filters. Production ignores client-supplied tenant/roles unless you add real identity (JWT/OIDC).
 
 ### 10. Multi-Source Retrieval
 
@@ -378,7 +382,7 @@ them as live production metrics.
 
 ### Resilience & Ops (Production Layer)
 
-Beyond the RAG graphs themselves, the serving path now includes:
+Beyond the canonical graph, the serving path includes:
 
 - **Redis answer cache & Vector Semantic Cache** — identical or semantically equivalent questions skip retrieval/LLM with strict RBAC segregation
 - **Groq LLM fallback** — OpenAI quota/outage retries on a secondary chat provider

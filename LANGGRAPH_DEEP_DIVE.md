@@ -1,5 +1,7 @@
 # 🕸️ LANGGRAPH DEEP DIVE — Master Architectural & Code-Level Reference
 
+> **⚠️ Historical document (pre-Phase 7).** Documents **seven removed StateGraphs** (`router_graph`, `crag_graph`, …). **Current graph:** [docs/LANGGRAPH.md](docs/LANGGRAPH.md)
+
 > **Document Type**: Code-Level Reverse Engineering & Runtime State Execution Manual  
 > **Target System**: LangGraph StateGraph implementations in `Agentic_RAG`  
 > **Last reviewed against source**: 2026-09-01  

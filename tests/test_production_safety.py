@@ -97,6 +97,17 @@ def test_production_rejects_multi_worker_with_memory_budgets():
             _validate_production_config()
 
 
+def test_production_rejects_client_rbac():
+    with (
+        patch.object(settings, "openai_api_key", "sk-test"),
+        patch.object(settings, "api_key", "k" * 32),
+        patch.object(settings, "cors_origins", "https://app.example.com"),
+        patch.object(settings, "trust_client_rbac", True),
+    ):
+        with pytest.raises(RuntimeError, match="TRUST_CLIENT_RBAC"):
+            _validate_production_config()
+
+
 def test_production_accepts_a_safe_configuration():
     with (
         patch.object(settings, "openai_api_key", "sk-test"),
@@ -104,6 +115,7 @@ def test_production_accepts_a_safe_configuration():
         patch.object(settings, "cors_origins", "https://app.example.com"),
         patch.object(settings, "api_workers", 4),
         patch.object(settings, "rate_limit_backend", "redis"),
+        patch.object(settings, "trust_client_rbac", False),
     ):
         _validate_production_config()  # must not raise
 

@@ -1,17 +1,28 @@
-import type { AgentMode, Citation, HealthStatus, QueryResponse } from '../types'
+import type {
+  Citation,
+  DocumentListResponse,
+  FeedbackCategory,
+  FeedbackRating,
+  HealthStatus,
+  IngestJob,
+  PipelinePayload,
+  QueryResponse,
+  RuntimeConfig,
+  UploadResponse,
+} from '../types'
+import type { AgentMode } from '../types'
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || '/api'
-/** Optional escape hatch — prefer server-side API_KEY via Vite/nginx proxy. */
 const API_KEY = (import.meta.env.VITE_API_KEY as string | undefined) || ''
 
-function headers(): HeadersInit {
-  const h: Record<string, string> = {
-    'Content-Type': 'application/json',
-  }
-  if (API_KEY) {
-    h['X-API-Key'] = API_KEY
-  }
+function headers(extra?: Record<string, string>): HeadersInit {
+  const h: Record<string, string> = { ...extra }
+  if (API_KEY) h['X-API-Key'] = API_KEY
   return h
+}
+
+function jsonHeaders(): HeadersInit {
+  return headers({ 'Content-Type': 'application/json' })
 }
 
 export class ApiError extends Error {
@@ -37,24 +48,31 @@ async function parseError(res: Response): Promise<string> {
   }
 }
 
-export async function checkHealth(): Promise<HealthStatus> {
-  const res = await fetch(`${API_BASE}/health`, { headers: headers() })
+async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+  return res.json() as Promise<T>
+}
+
+export async function checkHealth(): Promise<HealthStatus> {
+  const res = await fetch(`${API_BASE}/health`, { headers: jsonHeaders() })
+  return readJson<HealthStatus>(res)
 }
 
 export async function checkReady(): Promise<HealthStatus> {
-  const res = await fetch(`${API_BASE}/health/ready`, { headers: headers() })
-  // readiness may return 503 with a useful body
+  const res = await fetch(`${API_BASE}/health/ready`, { headers: jsonHeaders() })
   const body = await res.json().catch(() => null)
   if (!body) throw new ApiError(await parseError(res), res.status)
   return body as HealthStatus
 }
 
 export async function fetchModes(): Promise<Record<string, string>> {
-  const res = await fetch(`${API_BASE}/modes`, { headers: headers() })
-  if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+  const res = await fetch(`${API_BASE}/modes`, { headers: jsonHeaders() })
+  return readJson<Record<string, string>>(res)
+}
+
+export async function fetchRuntimeConfig(): Promise<RuntimeConfig> {
+  const res = await fetch(`${API_BASE}/config`, { headers: jsonHeaders() })
+  return readJson<RuntimeConfig>(res)
 }
 
 export interface ChatTurnPayload {
@@ -76,7 +94,7 @@ export interface QueryParams {
 export async function queryAgent(params: QueryParams): Promise<QueryResponse> {
   const res = await fetch(`${API_BASE}/query`, {
     method: 'POST',
-    headers: headers(),
+    headers: jsonHeaders(),
     signal: params.signal,
     body: JSON.stringify({
       question: params.question,
@@ -88,9 +106,7 @@ export async function queryAgent(params: QueryParams): Promise<QueryResponse> {
       user_roles: params.userRoles || ['public'],
     }),
   })
-
-  if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+  return readJson<QueryResponse>(res)
 }
 
 export interface StreamHandlers {
@@ -99,6 +115,7 @@ export interface StreamHandlers {
   onAnswer?: (answer: string) => void
   onFollowUps?: (followUps: string[]) => void
   onSources?: (sources: string[], citations: Citation[]) => void
+  onPipeline?: (pipeline: PipelinePayload) => void
   onDone?: (meta: {
     latency_ms: number
     session_id: string | null
@@ -106,18 +123,16 @@ export interface StreamHandlers {
     route?: string | null
     route_reason?: string | null
     steps?: string[]
+    cached?: boolean
+    error_code?: string | null
   }) => void
   onError?: (message: string) => void
 }
 
-/** Progressive SSE: steps as nodes finish, tokens as the final answer streams. */
-export async function streamQuery(
-  params: QueryParams,
-  handlers: StreamHandlers,
-): Promise<void> {
+export async function streamQuery(params: QueryParams, handlers: StreamHandlers): Promise<void> {
   const res = await fetch(`${API_BASE}/query/stream`, {
     method: 'POST',
-    headers: headers(),
+    headers: jsonHeaders(),
     signal: params.signal,
     body: JSON.stringify({
       question: params.question,
@@ -146,9 +161,7 @@ export async function streamQuery(
     buffer = chunks.pop() || ''
 
     for (const chunk of chunks) {
-      const line = chunk
-        .split('\n')
-        .find((l) => l.startsWith('data: '))
+      const line = chunk.split('\n').find((l) => l.startsWith('data: '))
       if (!line) continue
       try {
         const event = JSON.parse(line.slice(6)) as {
@@ -156,12 +169,15 @@ export async function streamQuery(
           content?: string | string[]
           message?: string
           citations?: Citation[]
+          stages?: PipelinePayload['stages']
           latency_ms?: number
           session_id?: string | null
           mode?: string
           route?: string | null
           route_reason?: string | null
           steps?: string[]
+          cached?: boolean
+          error_code?: string | null
         }
 
         if (event.type === 'step' && typeof event.content === 'string') {
@@ -175,6 +191,8 @@ export async function streamQuery(
         } else if (event.type === 'sources') {
           const sources = Array.isArray(event.content) ? event.content : []
           handlers.onSources?.(sources, event.citations ?? [])
+        } else if (event.type === 'pipeline' && Array.isArray(event.stages)) {
+          handlers.onPipeline?.({ type: 'pipeline', stages: event.stages })
         } else if (event.type === 'done') {
           handlers.onDone?.({
             latency_ms: event.latency_ms ?? 0,
@@ -183,6 +201,8 @@ export async function streamQuery(
             route: event.route,
             route_reason: event.route_reason,
             steps: event.steps,
+            cached: event.cached,
+            error_code: event.error_code,
           })
         } else if (event.type === 'error') {
           errorMessage = event.message || 'Stream error'
@@ -199,19 +219,39 @@ export async function streamQuery(
   }
 }
 
-// ---------------------------------------------------------------------------
-// Ingestion API Client Functions
-// ---------------------------------------------------------------------------
+export async function listDocuments(): Promise<DocumentListResponse> {
+  const res = await fetch(`${API_BASE}/documents`, { headers: jsonHeaders() })
+  return readJson<DocumentListResponse>(res)
+}
+
+export async function deleteDocument(source: string): Promise<{ source: string; deleted_chunks: number }> {
+  const res = await fetch(`${API_BASE}/documents?source=${encodeURIComponent(source)}`, {
+    method: 'DELETE',
+    headers: jsonHeaders(),
+  })
+  return readJson(res)
+}
+
+export async function uploadDocuments(files: File[]): Promise<UploadResponse> {
+  const body = new FormData()
+  for (const file of files) body.append('files', file)
+  const res = await fetch(`${API_BASE}/ingest/upload`, {
+    method: 'POST',
+    headers: headers(),
+    body,
+  })
+  return readJson<UploadResponse>(res)
+}
 
 export async function submitIngestJob(
   sourcePaths: string[],
   tenantId = 'default',
   accessGroups = ['public'],
   webhookUrl?: string,
-): Promise<any> {
+): Promise<IngestJob> {
   const res = await fetch(`${API_BASE}/ingest/jobs`, {
     method: 'POST',
-    headers: headers(),
+    headers: jsonHeaders(),
     body: JSON.stringify({
       source_paths: sourcePaths,
       tenant_id: tenantId,
@@ -219,22 +259,53 @@ export async function submitIngestJob(
       webhook_url: webhookUrl,
     }),
   })
-  if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+  return readJson<IngestJob>(res)
 }
 
-export async function getIngestJob(jobId: string): Promise<any> {
-  const res = await fetch(`${API_BASE}/ingest/jobs/${jobId}`, {
-    headers: headers(),
-  })
-  if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+export async function getIngestJob(jobId: string): Promise<IngestJob> {
+  const res = await fetch(`${API_BASE}/ingest/jobs/${jobId}`, { headers: jsonHeaders() })
+  return readJson<IngestJob>(res)
 }
 
-export async function listIngestJobs(limit = 50): Promise<any[]> {
-  const res = await fetch(`${API_BASE}/ingest/jobs?limit=${limit}`, {
-    headers: headers(),
+export async function listIngestJobs(limit = 50): Promise<IngestJob[]> {
+  const res = await fetch(`${API_BASE}/ingest/jobs?limit=${limit}`, { headers: jsonHeaders() })
+  return readJson<IngestJob[]>(res)
+}
+
+export async function submitFeedback(payload: {
+  rating: FeedbackRating
+  question: string
+  answer: string
+  mode?: string
+  comment?: string
+  categories?: FeedbackCategory[]
+  sessionId?: string | null
+  messageId?: string
+  route?: string | null
+  sources?: string[]
+  citations?: Citation[]
+  latencyMs?: number
+  consensusScore?: number | null
+}): Promise<{ ok: boolean; id: string }> {
+  const res = await fetch(`${API_BASE}/feedback`, {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      rating: payload.rating,
+      question: payload.question,
+      answer: payload.answer,
+      mode: payload.mode || '',
+      comment: payload.comment || '',
+      categories: payload.categories || [],
+      session_id: payload.sessionId || undefined,
+      message_id: payload.messageId,
+      route: payload.route,
+      sources: payload.sources || [],
+      citations: payload.citations || [],
+      latency_ms: payload.latencyMs,
+      consensus_score: payload.consensusScore,
+      client: 'web',
+    }),
   })
-  if (!res.ok) throw new ApiError(await parseError(res), res.status)
-  return res.json()
+  return readJson(res)
 }

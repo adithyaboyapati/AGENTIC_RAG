@@ -330,11 +330,11 @@ clean_output = PrivacyGuard.process_output(text, policy)
 ### In CLI
 
 ```bash
-python -m src.cli ask "What is my SSN 123-45-6789?" --mode crag
+python -m src.cli ask "What is my SSN 123-45-6789?" --mode canonical
 # ❌ ERROR: Input contains sensitive data: ssn
 # Query is blocked (PII blocks by default)
 
-python -m src.cli ask "What treatments exist for diabetes?" --mode crag
+python -m src.cli ask "What treatments exist for diabetes?" --mode canonical
 # ✅ Answered normally — PHI mentions don't block by default (see above)
 ```
 
@@ -343,7 +343,7 @@ python -m src.cli ask "What treatments exist for diabetes?" --mode crag
 ```bash
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "What about my credit card 1234-5678-9012-3456?", "mode": "crag"}'
+  -d '{"question": "What about my credit card 1234-5678-9012-3456?", "mode": "canonical"}'
 # Response: 400 Bad Request
 # "Input contains sensitive data: credit_card"
 ```

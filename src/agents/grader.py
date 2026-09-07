@@ -7,6 +7,8 @@ Only relevant chunks are passed to the generator.
 
 from __future__ import annotations
 
+import logging
+
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
 
@@ -14,6 +16,8 @@ from src.config import settings
 from src.llm import get_llm
 from src.prompts import GRADER_PROMPT
 from src.retrieval.retriever import format_docs
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentGrade(BaseModel):
@@ -44,8 +48,19 @@ def grade_documents(question: str, documents: list[Document]) -> tuple[list[Docu
     if not documents:
         return [], GradingResult(grades=[])
 
-    formatted = format_docs(documents)
-    result: GradingResult = grader_chain.invoke({"question": question, "documents": formatted})
+    formatted = format_docs(documents, query=question)
+    expected = set(range(1, len(documents) + 1))
+    result = GradingResult(grades=[])
+    for attempt in range(2):
+        result = grader_chain.invoke({"question": question, "documents": formatted})
+        got = {g.chunk_index for g in result.grades}
+        if expected <= got:
+            break
+        logger.warning(
+            "Grader missing indexes %s (attempt %d) — retrying",
+            sorted(expected - got),
+            attempt + 1,
+        )
 
     grade_map = {g.chunk_index: g for g in result.grades}
     threshold = settings.grader_relevance_threshold
@@ -53,7 +68,11 @@ def grade_documents(question: str, documents: list[Document]) -> tuple[list[Docu
     filtered: list[Document] = []
     for i, doc in enumerate(documents, 1):
         grade = grade_map.get(i)
-        if grade and grade.relevant and grade.score >= threshold:
+        if grade is None:
+            # Missing grade is not evidence of irrelevance — keep the chunk.
+            filtered.append(doc)
+            continue
+        if grade.relevant and grade.score >= threshold:
             filtered.append(doc)
 
     return filtered, result

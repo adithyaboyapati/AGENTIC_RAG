@@ -1,8 +1,10 @@
 # Learning Roadmap — Phase by Phase
 
-**Status:** Phases 0–13 complete (Phase 8 is the Consensus agent mode; Phase 8.5 is
-hardening; Phase 9 is production features: frontend, streaming, cache, metrics, circuit
-breakers, golden eval; Phase 13 is multi-source retrieval).
+> **Migration status (2026):** Phases 1–6 built the multi-graph system; **Phase 7** consolidated to canonical graph v1 and retired legacy runtime; **Phase 8 (continuous eval)** added the production improvement loop.  
+> **Current production docs:** [ARCHITECTURE.md](./ARCHITECTURE.md) · [DOCUMENTATION_MAP.md](./DOCUMENTATION_MAP.md)  
+> Below is **historical build history** — removed file paths are intentional.
+
+**Status:** Phases 0–13 complete (original numbering: Phase 8 = consensus agent mode in the learning roadmap; production Phase 8 = continuous evaluation — see [PHASE8_CONTINUOUS_EVAL.md](./PHASE8_CONTINUOUS_EVAL.md)).
 
 Each phase has **learning goals**, **what to build**, and **how to verify you understood it**.
 
@@ -410,6 +412,13 @@ After Phase 8, production feedback led to new capabilities:
 - **Citation extraction** (`src/retrieval/citations.py`) — `build_response()` assembles `AgentResponse` with validated citations and context docs
 - **Golden retrieval eval** (`src/evaluation/retrieval_metrics.py` + `data/eval/golden_qa.json`) — hit-rate, recall@k, MRR; `--offline` gate in CI
 
+### User Feedback Loop
+
+- **Capture** (`frontend/src/components/FeedbackBar.tsx`) — thumbs up is one click; thumbs down opens failure tags (`hallucination`, `wrong_source`, `incomplete`, `off_topic`, `too_slow`, `formatting`, `other`) plus a free-text comment
+- **Store** (`src/feedback/store.py`, `POST /feedback`) — rating, question, answer, mode, route, cited sources/citations, latency, session and tenant. Comment/question/answer are PII-redacted before insert. Supabase `answer_feedback` table (RLS, service-role only — see `docs/supabase_schema.sql`); SQLite fallback when Supabase is not configured
+- **Observe** — `GET /feedback/summary` (negative rate per mode, top categories, recent negatives), SQL views `answer_feedback_by_mode` / `answer_feedback_categories`, Prometheus `rag_feedback_total{mode,rating}` and `rag_feedback_categories_total{mode,category}`
+- **Close the loop** — `python -m src.feedback.export --since-days 7` writes thumbs-down items as golden-set candidates (`data/eval/feedback_regressions.json`); a human fills in `expected_keywords` / `expected_chunk_ids` and promotes them into `golden_qa.json` so the CI retrieval gate covers real user failures
+
 ### Follow-Up Questions
 - **Follow-up generation** (`src/agents/followups.py`) — generates 3 grounded follow-up questions post-answer, using fresh retrieval or answer snippets
 - **Frontend chips** — React UI renders clickable follow-up suggestions so users can explore related topics
@@ -435,10 +444,10 @@ After Phase 8, production feedback led to new capabilities:
 
 ## Phase 10: Semantic Caching & Multi-Tenant Document RBAC ✅ COMPLETE
 
-- **Vector-Based Semantic Caching** (`src/cache/semantic_cache.py`) — returns instant sub-50ms responses for semantically equivalent queries (cosine similarity ≥ 0.94)
-- **Fine-Grained Document RBAC & Multi-Tenancy** (`src/schemas.py::RBACContext`, `src/retrieval/retriever.py`) — enforces tenant isolation and role permissions at both vector and BM25 sparse retrieval layers
-- **Isolated Cache Keys** — privileged cache entries are strictly isolated by tenant ID and user roles, preventing privilege escalation via cache hits
-- **FastAPI Integration** — `tenant_id` and `user_roles` propagated through `/query` and `/query/stream`
+- **Vector-Based Semantic Caching** (`src/cache/semantic_cache.py`) — in-process cosine cache (not Redis-synced); flushed on ingest
+- **Document RBAC** — Chroma `where` tenant filter + post-filter for roles/classification; request context is bound via a ContextVar so every graph/tool retrieve inherits it
+- **No client-asserted identity in production** — `TRUST_CLIENT_RBAC` is refused at boot; a shared API key maps to `default`/`public` until JWT/OIDC is added
+- **Isolated Cache Keys** — cache entries include tenant ID and roles
 
 ## Phase 11: Multimodal Ingestion & Dynamic Context Compression ✅ COMPLETE
 
@@ -448,9 +457,10 @@ After Phase 8, production feedback led to new capabilities:
 
 ## Phase 12: Asynchronous Background Ingestion Queue & Webhooks ✅ COMPLETE
 
-- **Asynchronous Job Worker Queue** (`src/ingestion/queue.py`) — background document ingestion to prevent HTTP timeouts on large PDF batches
-- **Job Status & Progress Polling** (`POST /ingest/jobs`, `GET /ingest/jobs/{job_id}`, `GET /ingest/jobs`) — real-time progress percentages, chunk metrics, and failure diagnostics
-- **HMAC-Signed Webhooks** — automated callbacks with `X-Hub-Signature-256` signature verification upon job completion or failure
+- **Asynchronous Job Worker Queue** (`src/ingestion/queue.py`) — in-process thread pool (not durable across replicas/restarts)
+- **Job Status & Progress Polling** (`POST /ingest/jobs`, `GET /ingest/jobs/{job_id}`, `GET /ingest/jobs`) — progress percentages, chunk metrics, and failure diagnostics
+- **Path allowlist + webhook SSRF checks** — ingest may only read `INGEST_ALLOWED_ROOTS` (default `./data`); webhooks cannot target private/reserved IPs and require `WEBHOOK_SECRET` in production
+- **HMAC-Signed Webhooks** — `X-Hub-Signature-256` when `WEBHOOK_SECRET` is set
 - **Ingestion Prometheus Metrics** — tracks `rag_ingest_jobs_total`, `rag_ingest_chunks_total`, and `rag_ingest_duration_seconds`
 
 ## Phase 13: Multi-Source Retrieval (Database, Sample API, MCP) ✅ COMPLETE

@@ -1,4 +1,8 @@
-"""Unified agent runner for CLI, API, and Streamlit."""
+"""Unified agent runner for CLI, API, and Streamlit.
+
+Phase 7: canonical-primary execution. Deprecated public mode names map to
+canonical strategies for backward-compatible clients.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.config import settings
+from src.contracts.api_response import canonical_to_api_response
 from src.guardrails import (
     InputGuardrails,
     OutputGuardrails,
@@ -18,83 +23,55 @@ from src.guardrails import (
 )
 from src.memory.chat_memory import augment_question_with_history
 from src.privacy import PrivacyGuard, get_privacy_policy
-from src.schemas import AgentResponse
+from src.retrieval.context import use_rbac_context
+from src.runner_modes import (
+    is_deprecated_mode,
+    normalize_mode,
+    record_deprecated_mode_usage,
+    resolve_canonical_strategy,
+)
+from src.schemas import AgentResponse, RBACContext
 
 logger = logging.getLogger(__name__)
 
+CANONICAL_PIPELINE_VERSION = "v1"
+
 MODE_LABELS = {
-    "baseline": "Phase 1 — Baseline RAG",
-    "router": "Phase 2 — Query Router",
-    "crag": "Phase 3 — Corrective RAG",
-    "decompose": "Phase 4 — Query Decomposition",
-    "multi_hop": "Phase 5 — Multi-Hop Retrieval",
-    "tools": "Phase 6 — Tool-Augmented Agent",
-    "agentic": "Phase 7 — Full Agentic RAG",
-    "consensus": "Phase 8 — Multi-Agent Consensus Debate",
+    "canonical": "Canonical Agentic RAG",
+    "agentic": "Canonical Agentic RAG (deprecated alias)",
+    "baseline": "Deprecated — maps to canonical",
+    "router": "Deprecated — maps to canonical",
+    "crag": "Deprecated — maps to canonical",
+    "decompose": "Deprecated — maps to canonical",
+    "multi_hop": "Deprecated — maps to canonical",
+    "tools": "Deprecated — maps to canonical",
+    "consensus": "Deprecated — maps to canonical",
 }
 
 MODE_DESCRIPTIONS = {
-    "baseline": "Fixed pipeline: always retrieve → generate. No agentic decisions.",
-    "router": "Agent routes each question to direct answer, retrieval, or web search.",
-    "crag": "Grades retrieved docs, rewrites query on failure, falls back to web search.",
-    "decompose": "Splits complex questions into sub-queries; retrieves in parallel.",
-    "multi_hop": "Chains sequential retrievals where each hop builds on the last.",
-    "tools": "Agent picks tools: retrieve PDFs, query the catalog DB / ops API / lab MCP, web search, or calculate.",
-    "agentic": "Full orchestrator: analyzes question → picks strategy (decompose/multi-hop/tools/simple) → grades → generates.",
-    "consensus": "Multi-agent debate over retrieved chunks: Proposer → Challenger → Judge. Abstains when the sources cannot support the question.",
+    "canonical": "Unified canonical pipeline with strategy selection, evidence, and verification.",
+    "agentic": "Deprecated alias for the canonical pipeline.",
 }
 
 EXAMPLE_QUESTIONS = {
-    "baseline": "What is retrieval-augmented generation?",
-    "router": "Hello! What is corrective RAG?",
-    "crag": "What is Self-RAG?",
-    "decompose": "Compare naive RAG, advanced RAG, and modular RAG",
-    "multi_hop": "What fallback does CRAG use when retrieval fails?",
-    "tools": "Who owns retriever-prod and what did experiment 42 conclude about chunking?",
+    "canonical": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
     "agentic": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
-    "consensus": "Compare the performance trade-offs between Naive RAG and Modular RAG",
 }
 
 
 def _dispatch(question: str, mode: str) -> AgentResponse:
-    """Run the selected agent mode (no guardrails)."""
-    if mode == "baseline":
-        from src.rag.baseline import ask_baseline
+    """Run the canonical workflow (deprecated mode names map to strategies)."""
+    from src.graph.canonical_graph import ask_canonical
 
-        return ask_baseline(question)
-    if mode == "router":
-        from src.graph.router_graph import ask_router
+    normalized = normalize_mode(mode)
+    if is_deprecated_mode(normalized):
+        record_deprecated_mode_usage(normalized)
+        logger.info("Deprecated mode %s mapped to canonical strategy", normalized)
 
-        return ask_router(question)
-    if mode == "crag":
-        from src.graph.crag_graph import ask_crag
-
-        return ask_crag(question)
-    if mode == "decompose":
-        from src.graph.decompose_graph import ask_decompose
-
-        return ask_decompose(question)
-    if mode == "multi_hop":
-        from src.graph.multi_hop_graph import ask_multi_hop
-
-        return ask_multi_hop(question)
-    if mode == "tools":
-        from src.graph.tools_graph import ask_tools
-
-        return ask_tools(question)
-    if mode == "agentic":
-        from src.graph.agent_graph import ask_agentic
-
-        return ask_agentic(question)
-    if mode == "consensus":
-        if not settings.consensus_agent_enabled:
-            raise ValueError(
-                "Consensus mode is disabled (CONSENSUS_AGENT_ENABLED=false)"
-            )
-        from src.graph.consensus_graph import ask_consensus
-
-        return ask_consensus(question)
-    raise ValueError(f"Unknown mode: {mode}")
+    strategy = resolve_canonical_strategy(normalized)
+    canonical = ask_canonical(question, force_strategy=strategy)
+    display_mode = "canonical" if settings.canonical_primary else normalized
+    return canonical_to_api_response(canonical, display_mode=display_mode)
 
 
 def _apply_post_guardrails(result: AgentResponse) -> AgentResponse:
@@ -183,25 +160,36 @@ def run_agent(
 ) -> AgentResponse:
     """Dispatch a question to the selected agent mode with guardrails, privacy, and RBAC checks."""
     from src.cache.redis_cache import get_cached_response
-    from src.schemas import RBACContext
+    from src.evaluation.shadow_context import is_observational_execution
 
     ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
-    pre = _prepare_agent_run(question, mode, chat_history, use_memory, ctx)
+    with use_rbac_context(ctx):
+        pre = _prepare_agent_run(question, mode, chat_history, use_memory, ctx)
 
-    if pre.cacheable:
-        cached = get_cached_response(pre.sanitized_question, mode, ctx)
-        if cached is not None:
-            return _apply_post_guardrails(cached)
+        if pre.cacheable and not is_observational_execution():
+            cached = get_cached_response(pre.sanitized_question, mode, ctx)
+            if cached is not None:
+                return _apply_post_guardrails(cached)
 
-    _consume_budget(pre.tracker)
+        _consume_budget(pre.tracker, _estimate_tokens(pre.effective_question))
 
-    result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
-    result = _apply_post_guardrails(result)
-    result.tenant_id = ctx.tenant_id
-    result = _finalize_agent_result(
-        pre.sanitized_question, result, cacheable=pre.cacheable, rbac_context=ctx
-    )
-    return result
+        result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
+        result = _apply_post_guardrails(result)
+        result.tenant_id = ctx.tenant_id
+        result = _finalize_agent_result(
+            pre.sanitized_question,
+            result,
+            cacheable=pre.cacheable and not is_observational_execution(),
+            rbac_context=ctx,
+        )
+        _observe_production_request(
+            question=pre.sanitized_question,
+            mode=mode,
+            result=result,
+            rbac_context=ctx,
+            tracker=pre.tracker,
+        )
+        return result
 
 
 def _finalize_agent_result(
@@ -234,16 +222,62 @@ def _finalize_agent_result(
     return result
 
 
+def _observe_production_request(
+    *,
+    question: str,
+    mode: str,
+    result: AgentResponse,
+    rbac_context: RBACContext,
+    tracker: Any,
+) -> None:
+    """Record production telemetry for continuous evaluation (Phase 8)."""
+    try:
+        from src.evaluation.production_observer import observe_from_api_response
+        from src.evaluation.shadow_context import is_observational_execution
+        from src.llm import get_llm_provider
+        from src.logging_config import get_request_id
+
+        if is_observational_execution():
+            return
+
+        cost = 0.0
+        input_tokens = 0
+        output_tokens = 0
+        if tracker is not None:
+            input_tokens = int(getattr(tracker, "prompt_tokens", 0) or 0)
+            output_tokens = int(getattr(tracker, "completion_tokens", 0) or 0)
+            try:
+                cost = float(
+                    tracker.calculate_cost(input_tokens, output_tokens, provider=get_llm_provider())
+                )
+            except Exception:
+                cost = 0.0
+
+        observe_from_api_response(
+            request_id=get_request_id(),
+            tenant_id=rbac_context.tenant_id,
+            result=result,
+            latency_ms=float(getattr(result, "latency_ms", 0) or 0),
+            cost_usd=cost,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model_id=get_llm_provider(),
+            metadata={
+                "strategy": result.route_reason,
+                "verification_status": getattr(result, "verification_status", None),
+                "strategy_decision_source": "unknown",
+                "retry_count": 0,
+                "evidence_count": len(result.context_docs or []),
+                "llm_call_count": 0,
+            },
+        )
+    except Exception:
+        logger.debug("Production observation skipped", exc_info=True)
+
+
 def _attach_follow_ups(question: str, result: AgentResponse) -> list[str]:
     """Generate follow-ups from the user question + answer/context; never fail the request."""
     try:
-        if result.mode == "consensus":
-            from src.graph.consensus_graph import ABSTAIN_ANSWER
-
-            score = result.consensus_score
-            if result.answer == ABSTAIN_ANSWER or (score is not None and score < 0.4):
-                return []
-
         from src.agents.followups import generate_follow_ups
 
         return generate_follow_ups(
@@ -419,7 +453,7 @@ def _prepare_agent_run(
     )
 
 
-def _consume_budget(tracker: Any) -> None:
+def _consume_budget(tracker: Any, estimated_tokens: int = 0) -> None:
     """Enforce process-wide rate + token budgets, then record the query.
 
     Called only when work will actually be dispatched (i.e. after a cache miss).
@@ -433,6 +467,97 @@ def _consume_budget(tracker: Any) -> None:
         raise RateLimitError(budget_violations[0].message)
 
     tracker.record_query()
+    if estimated_tokens:
+        tracker.record_usage(estimated_tokens, 0)
+
+
+def _clip_text(text: str, limit: int = 4000) -> dict[str, Any]:
+    value = text if isinstance(text, str) else str(text or "")
+    if len(value) <= limit:
+        return {"text": value, "truncated": False}
+    return {
+        "text": value[:limit],
+        "truncated": True,
+        "original_length": len(value),
+    }
+
+
+def build_pipeline_payload(
+    *,
+    question: str,
+    mode: str,
+    result: AgentResponse,
+    sanitized_question: str,
+    effective_question: str,
+    latency_ms: float,
+    cached: bool = False,
+) -> dict[str, Any]:
+    """Structured pipeline stages for the frontend debug panel."""
+    citations = [c.to_dict() for c in (result.citations or [])]
+    context_docs = list(result.context_docs or [])
+    stages: list[dict[str, Any]] = [
+        {
+            "id": "query",
+            "label": "User Query",
+            "status": "complete",
+            "data": {"question": question, "mode": mode, "sanitized": sanitized_question},
+        },
+        {
+            "id": "processing",
+            "label": "Query Processing",
+            "status": "complete" if result.route else "skipped",
+            "data": {
+                "route": result.route,
+                "route_reason": result.route_reason,
+                "steps": list(result.steps or []),
+            },
+        },
+        {
+            "id": "retrieval",
+            "label": "Retrieval",
+            "status": "complete" if citations or context_docs else "skipped",
+            "data": {"sources": list(result.sources or [])},
+        },
+        {
+            "id": "chunks",
+            "label": "Retrieved Chunks",
+            "status": "complete" if citations else "skipped",
+            "data": {"count": len(citations), "citations": citations},
+        },
+        {
+            "id": "rerank",
+            "label": "Reranking",
+            "status": "complete" if result.grade_summary else "skipped",
+            "data": {"grade_summary": result.grade_summary},
+        },
+        {
+            "id": "context",
+            "label": "Context Construction",
+            "status": "complete" if context_docs else "skipped",
+            "data": {
+                "doc_count": len(context_docs),
+                "preview": _clip_text("\n---\n".join(context_docs[:3]), 2000),
+            },
+        },
+        {
+            "id": "generation",
+            "label": "LLM Generation",
+            "status": "complete" if result.answer else "skipped",
+            "data": _clip_text(result.answer or "", 2000),
+        },
+        {
+            "id": "answer",
+            "label": "Final Answer",
+            "status": "complete" if result.answer else "skipped",
+            "data": {
+                "answer": result.answer,
+                "follow_ups": list(result.follow_ups or []),
+                "latency_ms": latency_ms,
+                "cached": cached,
+            },
+        },
+    ]
+    return {"type": "pipeline", "stages": stages}
 
 
 def stream_agent(
@@ -453,7 +578,7 @@ def stream_agent(
     event boundary and unwinds the run instead of billing to completion.
     """
     from src.cache.redis_cache import get_cached_response
-    from src.schemas import RBACContext
+    from src.evaluation.shadow_context import is_observational_execution
     from src.streaming import CancelledRun, use_emitter
 
     ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
@@ -464,7 +589,7 @@ def stream_agent(
         yield {"type": "error", "message": str(exc)}
         return
 
-    cacheable = pre.cacheable
+    cacheable = pre.cacheable and not is_observational_execution()
     tracker = pre.tracker
     effective_question = pre.effective_question
 
@@ -484,6 +609,15 @@ def stream_agent(
                     "content": result.sources,
                     "citations": citations,
                 }
+            yield build_pipeline_payload(
+                question=question,
+                mode=mode,
+                result=result,
+                sanitized_question=pre.sanitized_question,
+                effective_question=pre.effective_question,
+                latency_ms=0.0,
+                cached=True,
+            )
             yield {"type": "done", "latency_ms": 0.0, "cached": True}
             return
 
@@ -500,8 +634,8 @@ def stream_agent(
 
     def worker() -> None:
         try:
-            _consume_budget(tracker)
-            with use_emitter(emit):
+            _consume_budget(tracker, _estimate_tokens(effective_question))
+            with use_rbac_context(ctx), use_emitter(emit):
                 result = _run_with_cost_tracking(effective_question, mode, tracker)
             result = _apply_post_guardrails(result)
             result.tenant_id = ctx.tenant_id
@@ -522,6 +656,16 @@ def stream_agent(
                         "citations": citations,
                     }
                 )
+            emit(
+                build_pipeline_payload(
+                    question=question,
+                    mode=mode,
+                    result=result,
+                    sanitized_question=pre.sanitized_question,
+                    effective_question=pre.effective_question,
+                    latency_ms=0.0,
+                )
+            )
             done: dict[str, Any] = {
                 "type": "done",
                 "mode": result.mode,

@@ -35,7 +35,7 @@ uvicorn src.api.server:app --host 0.0.0.0 --port 8000
 # 4. Test it
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is Self-RAG?", "mode": "agentic"}'
+  -d '{"question": "What is Self-RAG?", "mode": "canonical"}'
 ```
 
 If `REQUIRE_API_KEY=true` (mandatory once `ENVIRONMENT=production`, see below), add
@@ -50,8 +50,12 @@ python -m src.evaluation.retrieval_metrics --offline
 # Live retrieval metrics vs data/eval/golden_qa.json
 python -m src.evaluation.retrieval_metrics
 
-# RAGAS-inspired LLM-judge across all 8 modes → ragas_eval_results.json
+# RAGAS-inspired LLM-judge (optional; deprecated mode aliases route through canonical)
 python -m src.evaluation.evaluate_all_modes
+
+# Phase 8 continuous eval + regression gates
+python -m src.evaluation.eval_gates
+python -m src.evaluation.continuous_eval_cli
 ```
 
 ## Docker Deployment
@@ -202,7 +206,7 @@ Disable federation with `MULTI_SOURCE_ENABLED=false`.
 
 ```bash
 GET /modes
-→ {"baseline": "Phase 1 — Baseline RAG", ...}
+→ {"canonical": "Canonical Agentic RAG (production)", ...}  # deprecated aliases may be listed
 ```
 
 ### Query (Synchronous, authenticated + rate-limited)
@@ -213,14 +217,14 @@ POST /query
 
 {
   "question": "What is Self-RAG?",
-  "mode": "agentic",
+  "mode": "canonical",
   "session_id": "optional-8-to-64-char-id",
   "use_memory": true
 }
 
 → {
   "question": "...",
-  "mode": "agentic",
+  "mode": "canonical",
   "answer": "...",
   "sources": ["data/sample_docs/rag.pdf"],
   "route": "retrieve",
@@ -272,7 +276,7 @@ POST /query/stream
 curl -N http://localhost:8000/query/stream \
   -H "X-API-Key: your-key" \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is Self-RAG?", "mode": "agentic"}'
+  -d '{"question": "What is Self-RAG?", "mode": "canonical"}'
 ```
 
 Example frames:
@@ -285,7 +289,7 @@ data: {"type": "token", "content": "-RAG"}
 data: {"type": "answer", "content": "Self-RAG is …"}
 data: {"type": "follow_ups", "content": ["…", "…", "…"]}
 data: {"type": "sources", "content": ["rag.pdf#p2"], "citations": […]}
-data: {"type": "done", "latency_ms": 4200, "session_id": "…", "mode": "agentic"}
+data: {"type": "done", "latency_ms": 4200, "session_id": "…", "mode": "canonical"}
 ```
 
 ### Asynchronous Document Ingestion Queue & Webhooks
@@ -379,7 +383,8 @@ start when `ENVIRONMENT=production` and any of these is wrong:
 
 ### Testing & Deployment
 - [ ] Golden-set gate passes (`python -m src.evaluation.retrieval_metrics --offline`)
-- [ ] Evaluation suite run and reviewed (`python -m src.evaluation.evaluate_all_modes`)
+- [ ] Evaluation gates pass (`python -m src.evaluation.eval_gates`)
+- [ ] Continuous eval reviewed if enabled (`GET /ops/quality/dashboard`)
 - [ ] Test suite and lint pass (`pytest tests/ -q && ruff check src/ tests/`) — CI runs both automatically
 - [ ] Streaming endpoint tested for your longest expected queries
 - [ ] Knowledge base re-ingested after any corpus updates (parents + children refreshed; answer cache flushed)
@@ -418,20 +423,23 @@ Recommended branch flow (see root [README.md](../README.md#branching)):
 
 ## Monitoring & Cost
 
-### Latency by Mode
+### Latency (canonical mode)
 
-Approximate, from `python -m src.evaluation.evaluate_all_modes` (varies with model,
-corpus size, network latency, and whether NVIDIA rerank is enabled):
+Typical latency varies with strategy selected, retrieval retries, rerank provider, and verification. **Not yet measured** as fixed benchmarks in this document — run against your corpus:
 
-| Mode | Typical Latency |
-|------|------------------|
-| `baseline` | ~1–3s (retrieve + rerank + generation) |
-| `router` | ~2–4s (routing overhead) |
-| `crag` | ~3–6s (grading + possible retry) |
-| `decompose` | ~4–8s (parallel sub-retrievals + synthesis) |
-| `multi_hop` | ~5–10s (sequential retrieval loop) |
-| `tools` | ~2–5s (function calling) |
-| `agentic` | ~3–10s (strategy-dependent — picks one of the above internally) |
+```bash
+python -m src.cli ask "What is Self-RAG?" --mode canonical -v
+```
+
+Illustrative ranges (single query, sample corpus, `gpt-4o-mini`):
+
+| Path | Typical latency |
+|------|-----------------|
+| Direct answer (no retrieval) | ~1–3s |
+| Single-hop retrieve + generate | ~2–5s |
+| CRAG-style grade + rewrite loop | ~3–8s |
+| Multi-hop / decompose strategies | ~5–12s |
+| Web fallback | +2–4s |
 
 NVIDIA rerank typically adds a few hundred ms per retrieve call (one HTTP round-trip over
 `candidate_k` passages). Use `RERANK_PROVIDER=flashrank` for offline/local latency, or
@@ -447,7 +455,7 @@ wired into `src/runner.py`) using LangChain's OpenAI callback — not an estimat
 query logs:
 
 ```
-Token usage | mode=agentic | prompt=842 | completion=310 | cost=$0.00032
+Token usage | mode=canonical | prompt=842 | completion=310 | cost=$0.00032
 ```
 
 Default pricing assumes `gpt-4o-mini` (`COST_PER_1K_INPUT_USD=0.00015`,
@@ -576,7 +584,7 @@ For production scale, in rough order of effort:
 2. **Multiple API workers** — safe with Redis-backed rate limits / cost budgets (`RATE_LIMIT_BACKEND=redis`) and Chroma HTTP (not local SQLite).
 3. **Redis response cache** (above) — cut repeat-query LLM cost/latency; flushed on re-ingest.
 4. **Load balancing** — nginx or a cloud load balancer; set `TRUST_PROXY_HEADERS=true` and `TRUSTED_HOSTS=...` when terminating TLS upstream.
-5. **Auto-scaling** — Kubernetes or ECS, using `/health` for liveness and `/health/ready` for readiness probes (checks Chroma, OpenAI key, Redis, extra sources, optional Groq/NVIDIA/Supabase). `/health/ready` is auth-gated by default: either give the probe the `X-API-Key` header or set `PROTECT_READINESS_ENDPOINT=false` when the probe cannot send headers and the network already restricts access.
+5. **Auto-scaling (not shipped)** — there is no Helm chart or k8s manifest in this repo yet. When you add one, use `/health` for liveness and `/health/ready` for readiness (Chroma, OpenAI key, Redis, extra sources, optional Groq/NVIDIA/Supabase). `/health/ready` is auth-gated by default: give the probe `X-API-Key` or set `PROTECT_READINESS_ENDPOINT=false` when the network already restricts access. In-process ingest jobs, BM25, and the semantic cache are **not** shared across replicas — keep `API_WORKERS=1` or move those stores before you scale out.
 
 Set `MAX_CONCURRENT_QUERIES` per replica against your provider's concurrency limit, and
 size replicas so `total_replicas × MAX_CONCURRENT_QUERIES` stays under it. Verify with a
@@ -606,7 +614,7 @@ This is intentional — set `API_KEY` (and `OPENAI_API_KEY`) before setting
 ### Query times out (504)
 
 - Check `OPENAI_API_KEY` is valid and has available quota
-- Check `REQUEST_TIMEOUT_SECONDS` (client-facing) vs `OPENAI_TIMEOUT_SECONDS` (per-LLM-call) — both must be long enough for your slowest mode (`multi_hop`/`decompose` make several sequential LLM calls)
+- Check `REQUEST_TIMEOUT_SECONDS` (client-facing) vs `OPENAI_TIMEOUT_SECONDS` (per-LLM-call) — complex strategies (multi-hop, decompose) make several sequential LLM calls
 
 ### Rate limited unexpectedly (429)
 
@@ -615,7 +623,8 @@ This is intentional — set `API_KEY` (and `OPENAI_API_KEY`) before setting
 
 ### Low quality answers
 
-- Run `python -m src.evaluation.evaluate_all_modes` to diagnose which mode/metric is weak
+- Run `python -m src.evaluation.eval_gates` and review `GET /ops/quality/dashboard`
+- Optional: `python -m src.evaluation.evaluate_all_modes` for RAGAS-style scoring
 - Increase `RETRIEVAL_TOP_K`
 - Lower `GRADER_RELEVANCE_THRESHOLD` (less strict filtering) or raise it (stricter — more retries/fallbacks)
 - Re-ingest the knowledge base if the corpus is outdated
@@ -623,7 +632,7 @@ This is intentional — set `API_KEY` (and `OPENAI_API_KEY`) before setting
 ### High costs
 
 - Check the per-query cost logs (`Token usage | ... | cost=$...`) to find expensive queries
-- Prefer `router`, `crag`, or `tools` modes over `decompose`/`multi_hop`/`agentic` for latency- and cost-sensitive traffic (fewer LLM calls)
+- Use simpler questions or tune strategy heuristics for latency-sensitive traffic (fewer retrieval hops)
 - Lower `MAX_OUTPUT_TOKENS` if answers are longer than needed
 
 ---

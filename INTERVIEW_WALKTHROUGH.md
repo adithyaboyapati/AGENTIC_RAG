@@ -1,6 +1,8 @@
 # Agentic RAG — Comprehensive Interview Walkthrough Guide
 
-> **Purpose**: Use this guide to deliver a confident, structured, master-level walkthrough of the Agentic RAG system in your interview. It covers the **30-second hook**, the **3-minute architecture pitch**, the **exact step-by-step request flow**, **key design decisions & trade-offs**, **live demo walkthrough script**, and **tough technical Q&A defense**.
+> **⚠️ Historical document (pre-Phase 7).** Follows legacy mode dispatch and deleted graph modules. **Current architecture:** [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · [docs/LANGGRAPH.md](docs/LANGGRAPH.md)
+
+> **Purpose**: Use this guide to deliver a confident, structured, master-level walkthrough of the Agentic RAG system in your interview.
 
 ---
 
@@ -97,7 +99,7 @@ When explaining the system to the interviewer, draw or describe these **5 distin
 │ • Precision Citation Engine (File, Page, Section, Chunk ID, Confidence Score)           │
 │ • Predictive Follow-Up Question Generator                                               │
 │ • Cooperative Threaded SSE Streaming with `CancelledRun` Client Disconnect Checkpoints  │
-│ • Observability: LangSmith Tracing, Prometheus Metrics, OpenTelemetry                   │
+│ • Observability: LangSmith Tracing, Prometheus Metrics (no OpenTelemetry exporter yet)  │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 

@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — point-in-time milestone. Current: [../PRIVACY_COMPLIANCE.md](../PRIVACY_COMPLIANCE.md)
+
 # Privacy & Compliance Quick Reference
 
 **Status**: ✅ **ENABLED** — Automatic PII/PHI detection and protection

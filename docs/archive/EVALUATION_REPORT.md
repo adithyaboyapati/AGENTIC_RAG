@@ -1,3 +1,5 @@
+> **Historical archive snapshot** — point-in-time milestone from pre-canonical era. Current docs: [../DOCUMENTATION_MAP.md](../DOCUMENTATION_MAP.md) · [../ARCHITECTURE.md](../ARCHITECTURE.md)
+
 # Agentic RAG — Phase 8 Evaluation Report
 
 **Date**: August 5, 2026  

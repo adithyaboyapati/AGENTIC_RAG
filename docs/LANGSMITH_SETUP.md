@@ -39,7 +39,7 @@ Tracing initializes automatically — `src/bootstrap.py` calls
 first. No code changes needed per-query:
 
 ```bash
-python -m src.cli ask "What is Self-RAG?" --mode crag -v
+python -m src.cli ask "What is Self-RAG?" --mode canonical -v
 ```
 
 Then view the trace at [smith.langchain.com](https://smith.langchain.com), project

@@ -264,6 +264,14 @@ class CostGuardrails:
     _REDIS_TOK_MIN = "cost:v1:tokens_minute"
     _REDIS_TOK_HOUR = "cost:v1:tokens_hour"
 
+    @staticmethod
+    def _window_key(prefix: str, window_seconds: int) -> str:
+        """Fixed window so EXPIRE cannot be re-armed forever under load."""
+        import time
+
+        bucket = int(time.time()) // max(1, window_seconds)
+        return f"{prefix}:{bucket}"
+
     def __init__(self):
         """Initialize cost tracker."""
         import threading
@@ -289,7 +297,7 @@ class CostGuardrails:
         client = self._redis()
         if client is not None:
             try:
-                recent = int(client.get(self._REDIS_QPM) or 0)
+                recent = int(client.get(self._window_key(self._REDIS_QPM, 60)) or 0)
                 if recent >= limit:
                     return False, [
                         GuardrailViolation(
@@ -325,9 +333,10 @@ class CostGuardrails:
         client = self._redis()
         if client is not None:
             try:
+                key = self._window_key(self._REDIS_QPM, 60)
                 pipe = client.pipeline()
-                pipe.incr(self._REDIS_QPM)
-                pipe.expire(self._REDIS_QPM, 60)
+                pipe.incr(key)
+                pipe.expire(key, 120)
                 pipe.execute()
             except Exception:
                 pass
@@ -344,8 +353,8 @@ class CostGuardrails:
         client = self._redis()
         if client is not None:
             try:
-                minute_tokens = int(client.get(self._REDIS_TOK_MIN) or 0)
-                hourly_tokens = int(client.get(self._REDIS_TOK_HOUR) or 0)
+                minute_tokens = int(client.get(self._window_key(self._REDIS_TOK_MIN, 60)) or 0)
+                hourly_tokens = int(client.get(self._window_key(self._REDIS_TOK_HOUR, 3600)) or 0)
                 if minute_tokens >= settings.max_tokens_per_minute:
                     violations.append(
                         GuardrailViolation(
@@ -412,11 +421,13 @@ class CostGuardrails:
         client = self._redis()
         if client is not None and total:
             try:
+                min_key = self._window_key(self._REDIS_TOK_MIN, 60)
+                hour_key = self._window_key(self._REDIS_TOK_HOUR, 3600)
                 pipe = client.pipeline()
-                pipe.incrby(self._REDIS_TOK_MIN, total)
-                pipe.expire(self._REDIS_TOK_MIN, 60)
-                pipe.incrby(self._REDIS_TOK_HOUR, total)
-                pipe.expire(self._REDIS_TOK_HOUR, 3600)
+                pipe.incrby(min_key, total)
+                pipe.expire(min_key, 120)
+                pipe.incrby(hour_key, total)
+                pipe.expire(hour_key, 7200)
                 pipe.execute()
             except Exception:
                 pass
@@ -451,10 +462,10 @@ class CostGuardrails:
         if client is not None:
             try:
                 return {
-                    "queries_per_minute": int(client.get(self._REDIS_QPM) or 0),
-                    "tokens_per_minute": int(client.get(self._REDIS_TOK_MIN) or 0),
-                    "tokens_per_hour": int(client.get(self._REDIS_TOK_HOUR) or 0),
-                    "total_queries": int(client.get(self._REDIS_QPM) or 0),
+                    "queries_per_minute": int(client.get(self._window_key(self._REDIS_QPM, 60)) or 0),
+                    "tokens_per_minute": int(client.get(self._window_key(self._REDIS_TOK_MIN, 60)) or 0),
+                    "tokens_per_hour": int(client.get(self._window_key(self._REDIS_TOK_HOUR, 3600)) or 0),
+                    "total_queries": int(client.get(self._window_key(self._REDIS_QPM, 60)) or 0),
                     "backend": "redis",
                 }
             except Exception:
@@ -501,7 +512,7 @@ class QualityGuardrails:
         """Validate quality metrics."""
         violations: list[GuardrailViolation] = []
 
-        if faithfulness < cls.MIN_FAITHFULNESS:
+        if 0.0 <= faithfulness < cls.MIN_FAITHFULNESS:
             violations.append(
                 GuardrailViolation(
                     rule="low_faithfulness",
@@ -512,7 +523,7 @@ class QualityGuardrails:
                 )
             )
 
-        if relevance < cls.MIN_RELEVANCE:
+        if 0.0 <= relevance < cls.MIN_RELEVANCE:
             violations.append(
                 GuardrailViolation(
                     rule="low_relevance",
@@ -523,7 +534,7 @@ class QualityGuardrails:
                 )
             )
 
-        if context_precision < cls.MIN_CONTEXT_PRECISION:
+        if 0.0 <= context_precision < cls.MIN_CONTEXT_PRECISION:
             violations.append(
                 GuardrailViolation(
                     rule="low_context_precision",

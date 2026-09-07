@@ -42,6 +42,7 @@ from src.api.metrics import (
 from src.api.rate_limit import enforce_client_rate_limit
 from src.api.security import (
     auth_required,
+    resolve_request_rbac,
     verify_api_key,
     verify_metrics_access,
     verify_readiness_access,
@@ -52,6 +53,7 @@ from src.guardrails import RateLimitError
 from src.logging_config import get_request_id, set_request_id, setup_logging
 from src.observability import init_langsmith_tracing
 from src.runner import MODE_LABELS, run_agent, stream_agent
+from src.api.documents import router as documents_router
 from src.sources.mcp_server import mcp_router
 from src.sources.sample_api import router as kb_router
 
@@ -82,6 +84,11 @@ def _validate_production_config() -> None:
         )
     if settings.api_key and len(settings.api_key) < 32:
         errors.append("API_KEY must be at least 32 characters")
+    if settings.trust_client_rbac:
+        errors.append(
+            "TRUST_CLIENT_RBAC is not allowed in production — tenant and roles "
+            "must be derived server-side, not from the request body"
+        )
 
     # Budgets and rate limits live in-process unless Redis backs them. With
     # multiple workers that silently multiplies every configured ceiling.
@@ -146,7 +153,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
     allow_credentials=not _wildcard,
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=[
         "Content-Type",
         "X-API-Key",
@@ -163,17 +170,19 @@ if _trusted:
 
 app.include_router(kb_router)
 app.include_router(mcp_router)
+app.include_router(documents_router)
 
 
 class AgentMode(str, Enum):
-    baseline = "baseline"
-    router = "router"
-    crag = "crag"
-    decompose = "decompose"
-    multi_hop = "multi_hop"
-    tools = "tools"
-    agentic = "agentic"
-    consensus = "consensus"
+    canonical = "canonical"
+    agentic = "agentic"  # deprecated alias — maps to canonical
+    baseline = "baseline"  # deprecated
+    router = "router"  # deprecated
+    crag = "crag"  # deprecated
+    decompose = "decompose"  # deprecated
+    multi_hop = "multi_hop"  # deprecated
+    tools = "tools"  # deprecated
+    consensus = "consensus"  # deprecated
 
 
 class ChatTurnIn(BaseModel):
@@ -183,7 +192,7 @@ class ChatTurnIn(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
-    mode: AgentMode = Field(default=AgentMode.agentic)
+    mode: AgentMode = Field(default=AgentMode.canonical)
     session_id: str | None = Field(
         default=None,
         min_length=8,
@@ -237,6 +246,11 @@ class QueryResponse(BaseModel):
     consensus_score: float | None = None
     critique_summary: str | None = None
     error_code: str | None = None
+    verification_status: str | None = None
+    confidence: float | None = None
+    response_status: str | None = None
+    pipeline_version: str | None = None
+    request_id: str | None = None
 
 
 # Hard ceiling on agent runs in flight. Without it, requests pile up behind the
@@ -283,6 +297,18 @@ async def _run_agent_with_timeout(
     carries its own hard timeout (openai_timeout_seconds), so abandoned work
     terminates instead of billing indefinitely.
     """
+    if settings.shadow_enabled or settings.canary_enabled:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _run_with_traffic_policy_sync,
+                question,
+                mode,
+                chat_history=chat_history,
+                use_memory=use_memory,
+                rbac_context=rbac_context,
+            ),
+            timeout=settings.request_timeout_seconds,
+        )
     return await asyncio.wait_for(
         asyncio.to_thread(
             run_agent,
@@ -294,6 +320,28 @@ async def _run_agent_with_timeout(
         ),
         timeout=settings.request_timeout_seconds,
     )
+
+
+def _run_with_traffic_policy_sync(
+    question: str,
+    mode: str,
+    *,
+    chat_history: list[dict[str, str]] | None = None,
+    use_memory: bool = True,
+    rbac_context: Any | None = None,
+):
+    from src.evaluation.traffic_policy import execute_with_traffic_policy
+
+    outcome = execute_with_traffic_policy(
+        question=question,
+        mode=mode,
+        rbac_context=rbac_context,
+        request_id=get_request_id(),
+        chat_history=chat_history,
+        use_memory=use_memory,
+        canonical_strategy=settings.canary_strategy,
+    )
+    return outcome.response
 
 
 def _memory_active(use_memory: bool) -> bool:
@@ -390,6 +438,49 @@ async def list_modes(_: None = Depends(verify_api_key)) -> dict[str, str]:
     return MODE_LABELS
 
 
+@app.get("/ops/legacy/retirement")
+async def ops_legacy_retirement(_auth: None = Depends(verify_api_key)) -> dict[str, Any]:
+    """Legacy retirement readiness and dependency inventory."""
+    from src.evaluation.legacy_retirement import (
+        evaluate_legacy_retirement_readiness,
+        inventory_table,
+    )
+
+    evaluation = evaluate_legacy_retirement_readiness()
+    return {
+        "status": evaluation.status.value,
+        "blocking_reasons": evaluation.blocking_reasons,
+        "warnings": evaluation.warnings,
+        "legacy_fallback_rate": evaluation.legacy_fallback_rate,
+        "canary_sample_count": evaluation.canary_sample_count,
+        "inventory": inventory_table(),
+    }
+
+
+@app.get("/config")
+async def runtime_config(_: None = Depends(verify_api_key)) -> dict[str, Any]:
+    """Non-secret runtime settings the UI needs to label controls honestly."""
+    return {
+        "openai_model": settings.openai_model,
+        "embedding_model": settings.openai_embedding_model,
+        "retrieval_top_k": settings.retrieval_top_k,
+        "retrieval_candidate_k": settings.retrieval_candidate_k,
+        "retrieval_search_type": settings.retrieval_search_type,
+        "rerank_enabled": settings.rerank_enabled,
+        "rerank_provider": settings.rerank_provider,
+        "rerank_model": settings.rerank_model,
+        "memory_enabled": settings.memory_enabled,
+        "consensus_enabled": settings.consensus_agent_enabled,
+        "multi_source_enabled": settings.multi_source_enabled,
+        "feedback_enabled": settings.feedback_enabled,
+        "max_output_tokens": settings.max_output_tokens,
+        "chunking_strategy": settings.chunking_strategy,
+        "expand_to_parent": settings.expand_to_parent,
+        "context_compression_enabled": settings.context_compression_enabled,
+        "ingest_max_upload_mb": settings.ingest_max_upload_mb,
+    }
+
+
 def _request_body_hash(request: QueryRequest) -> str:
     payload = request.model_dump(mode="json")
     raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
@@ -418,12 +509,7 @@ async def query(
     status = "ok"
     start = time.time()
     try:
-        from src.schemas import RBACContext
-
-        rbac = RBACContext(
-            tenant_id=request.tenant_id or "default",
-            user_roles=request.user_roles or ["public"],
-        )
+        rbac = resolve_request_rbac(request.tenant_id, request.user_roles)
         chat_history, session_id = await _resolve_chat_history(
             request.session_id,
             request.use_memory,
@@ -471,6 +557,11 @@ async def query(
             consensus_score=getattr(result, "consensus_score", None),
             critique_summary=getattr(result, "critique_summary", None),
             error_code=result.error_code,
+            verification_status=getattr(result, "verification_status", None),
+            confidence=getattr(result, "confidence", None),
+            response_status=getattr(result, "response_status", None),
+            pipeline_version=getattr(result, "pipeline_version", None) or "canonical-v1",
+            request_id=get_request_id(),
         )
         if idempotency_key:
             set_idempotent_response(
@@ -513,12 +604,7 @@ async def query_stream(
     """SSE stream of agent steps + answer tokens as they are produced."""
 
     async def event_generator():
-        from src.schemas import RBACContext
-
-        rbac = RBACContext(
-            tenant_id=request.tenant_id or "default",
-            user_roles=request.user_roles or ["public"],
-        )
+        rbac = resolve_request_rbac(request.tenant_id, request.user_roles)
         start = time.time()
         chat_history, session_id = await _resolve_chat_history(
             request.session_id,
@@ -537,15 +623,31 @@ async def query_stream(
 
         def _produce() -> None:
             try:
-                for event in stream_agent(
-                    request.question,
-                    request.mode.value,
-                    chat_history=chat_history,
-                    use_memory=use_memory,
-                    cancelled=cancelled,
-                    rbac_context=rbac,
-                ):
-                    loop.call_soon_threadsafe(event_queue.put_nowait, event)
+                if settings.shadow_enabled or settings.canary_enabled:
+                    from src.evaluation.traffic_policy import iter_stream_with_traffic_policy
+                    from src.logging_config import get_request_id
+
+                    for event in iter_stream_with_traffic_policy(
+                        question=request.question,
+                        mode=request.mode.value,
+                        rbac_context=rbac,
+                        request_id=get_request_id(),
+                        chat_history=chat_history,
+                        use_memory=use_memory,
+                        cancelled=cancelled,
+                        canonical_strategy=settings.canary_strategy,
+                    ):
+                        loop.call_soon_threadsafe(event_queue.put_nowait, event)
+                else:
+                    for event in stream_agent(
+                        request.question,
+                        request.mode.value,
+                        chat_history=chat_history,
+                        use_memory=use_memory,
+                        cancelled=cancelled,
+                        rbac_context=rbac,
+                    ):
+                        loop.call_soon_threadsafe(event_queue.put_nowait, event)
             except Exception:
                 logger.exception("stream_agent producer failed")
                 loop.call_soon_threadsafe(
@@ -693,16 +795,26 @@ class IngestJobResponse(BaseModel):
 async def submit_ingest_job(
     request: IngestJobRequest,
     _auth: None = Depends(verify_api_key),
+    _rate: None = Depends(enforce_client_rate_limit),
 ) -> IngestJobResponse:
     """Submit a document ingestion job to the asynchronous background worker queue."""
     from src.ingestion.queue import get_ingestion_queue
+    from src.security.paths import UnsafeIngestPath, resolve_ingest_path
+    from src.security.ssrf import UnsafeWebhookUrl, validate_webhook_url
 
+    try:
+        resolved_paths = [str(resolve_ingest_path(p)) for p in request.source_paths]
+        webhook = validate_webhook_url(request.webhook_url)
+    except (UnsafeIngestPath, UnsafeWebhookUrl) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rbac = resolve_request_rbac(request.tenant_id, request.access_groups)
     queue = get_ingestion_queue()
     job = queue.submit_job(
-        source_paths=request.source_paths,
-        tenant_id=request.tenant_id,
-        access_groups=request.access_groups,
-        webhook_url=request.webhook_url,
+        source_paths=resolved_paths,
+        tenant_id=rbac.tenant_id,
+        access_groups=list(rbac.user_roles),
+        webhook_url=webhook,
     )
     return IngestJobResponse(**job.to_dict())
 
@@ -731,6 +843,292 @@ async def list_ingest_jobs(
 
     jobs = get_ingestion_queue().list_jobs(limit=min(100, max(1, limit)))
     return [IngestJobResponse(**j.to_dict()) for j in jobs]
+
+
+# ---------------------------------------------------------------------------
+# User feedback — the signal that tells us where the system is actually wrong.
+# ---------------------------------------------------------------------------
+
+
+class FeedbackRequest(BaseModel):
+    rating: Literal["up", "down"]
+    question: str = Field(..., min_length=1, max_length=4000)
+    answer: str = Field(..., min_length=1, max_length=12000)
+    mode: str = Field(default="", max_length=32)
+    comment: str = Field(default="", max_length=2000)
+    categories: list[
+        Literal[
+            "hallucination",
+            "wrong_source",
+            "incomplete",
+            "off_topic",
+            "too_slow",
+            "formatting",
+            "other",
+        ]
+    ] = Field(default_factory=list, max_length=5)
+    session_id: str | None = Field(
+        default=None, min_length=8, max_length=64, pattern=r"^[A-Za-z0-9_-]+$"
+    )
+    message_id: str | None = Field(default=None, max_length=64)
+    request_id: str | None = Field(default=None, max_length=128)
+    tenant_id: str | None = Field(default="default", max_length=64)
+    route: str | None = Field(default=None, max_length=64)
+    sources: list[str] = Field(default_factory=list, max_length=50)
+    citations: list[CitationOut] = Field(default_factory=list, max_length=50)
+    latency_ms: float | None = None
+    consensus_score: float | None = None
+    client: str = Field(default="web", max_length=32)
+
+
+class FeedbackResponse(BaseModel):
+    ok: bool
+    id: str
+    backend: str
+
+
+@app.post("/feedback", response_model=FeedbackResponse, status_code=201)
+async def submit_feedback(
+    request: FeedbackRequest,
+    _auth: None = Depends(verify_api_key),
+    _rate: None = Depends(enforce_client_rate_limit),
+) -> FeedbackResponse:
+    """Record a thumbs up/down (and optional comment) on an answer."""
+    from src.feedback.store import FeedbackRecord, save_feedback
+
+    if not settings.feedback_enabled:
+        raise HTTPException(status_code=404, detail="Feedback collection is disabled")
+
+    rbac = resolve_request_rbac(request.tenant_id, ["public"])
+    record = FeedbackRecord(
+        rating=request.rating,
+        question=request.question,
+        answer=request.answer,
+        mode=request.mode,
+        comment=request.comment,
+        categories=list(request.categories),
+        session_id=request.session_id,
+        message_id=request.message_id,
+        request_id=request.request_id or get_request_id(),
+        tenant_id=rbac.tenant_id,
+        route=request.route,
+        sources=list(request.sources),
+        citations=[c.model_dump() for c in request.citations],
+        latency_ms=request.latency_ms,
+        consensus_score=request.consensus_score,
+        client=request.client,
+    )
+    ok, backend = await asyncio.to_thread(save_feedback, record)
+    if not ok:
+        raise HTTPException(status_code=503, detail="Feedback store unavailable")
+    return FeedbackResponse(ok=True, id=record.id, backend=backend)
+
+
+@app.get("/feedback/summary")
+async def feedback_summary(
+    limit: int = 1000,
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    """Aggregate ratings per mode and top failure categories (operator view)."""
+    from src.feedback.store import summarize_feedback
+
+    return await asyncio.to_thread(summarize_feedback, min(5000, max(1, limit)))
+
+
+@app.get("/feedback")
+async def list_feedback_rows(
+    limit: int = 100,
+    rating: Literal["up", "down"] | None = None,
+    mode: str | None = None,
+    _auth: None = Depends(verify_api_key),
+) -> list[dict[str, Any]]:
+    """Recent feedback rows, newest first (operator view)."""
+    from src.feedback.store import list_feedback
+
+    return await asyncio.to_thread(list_feedback, min(1000, max(1, limit)), rating, mode)
+
+
+@app.get("/ops/preflight")
+async def ops_preflight(
+    for_canary: bool = False,
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    """Pre-canary dependency validation report."""
+    from src.evaluation.preflight import run_preflight
+
+    return await asyncio.to_thread(lambda: run_preflight(for_canary=for_canary).to_dict())
+
+
+@app.get("/ops/canary/dashboard")
+async def ops_canary_dashboard(_auth: None = Depends(verify_api_key)) -> dict[str, Any]:
+    """Operator dashboard for canary rollout inspection."""
+    from src.evaluation.canary_dashboard import build_canary_dashboard
+
+    return await asyncio.to_thread(build_canary_dashboard)
+
+
+@app.get("/ops/canary/gates")
+async def ops_canary_gates(_auth: None = Depends(verify_api_key)) -> dict[str, Any]:
+    """Evaluate shadow evidence, promotion, rollback, and cutover gates."""
+    from src.evaluation.canary_gates import (
+        evaluate_canary_promotion_gates,
+        evaluate_full_cutover_readiness,
+        evaluate_rollback_conditions,
+        evaluate_shadow_evidence_gate,
+    )
+    from src.evaluation.canary_rollout import get_rollout_state
+
+    def _eval() -> dict[str, Any]:
+        shadow = evaluate_shadow_evidence_gate()
+        promotion = evaluate_canary_promotion_gates()
+        rollback = evaluate_rollback_conditions()
+        cutover = evaluate_full_cutover_readiness()
+        return {
+            "rollout": {
+                "mode": get_rollout_state().mode.value,
+                "canary_enabled": get_rollout_state().canary_enabled,
+                "canary_percent": get_rollout_state().canary_percent,
+                "canary_stage": get_rollout_state().canary_stage,
+                "shadow_enabled": get_rollout_state().shadow_enabled,
+                "shadow_sampling_rate": get_rollout_state().shadow_sampling_rate,
+                "kill_switch_active": get_rollout_state().kill_switch_active,
+                "canonical_primary": get_rollout_state().canonical_primary,
+                "legacy_fallback_enabled": get_rollout_state().legacy_fallback_enabled,
+                "legacy_traffic_percent": get_rollout_state().legacy_traffic_percent,
+                "canonical_traffic_percent": get_rollout_state().canonical_traffic_percent,
+                "shadow_traffic_percent": get_rollout_state().shadow_traffic_percent,
+            },
+            "shadow_evidence": {
+                "eligible": shadow.eligible,
+                "blocking_gates": [g.__dict__ for g in shadow.blocking_gates],
+                "recommendation": shadow.recommendation.value,
+            },
+            "promotion": {
+                "eligible": promotion.eligible,
+                "blocking_gates": [g.__dict__ for g in promotion.blocking_gates],
+                "warnings": [g.__dict__ for g in promotion.warnings],
+                "recommendation": promotion.recommendation.value,
+            },
+            "rollback": {
+                "eligible": rollback.eligible,
+                "blocking_gates": [g.__dict__ for g in rollback.blocking_gates],
+            },
+            "cutover": {
+                "eligible": cutover.eligible,
+                "blocking_gates": [g.__dict__ for g in cutover.blocking_gates],
+                "recommendation": cutover.recommendation.value,
+            },
+        }
+
+    return await asyncio.to_thread(_eval)
+
+
+@app.get("/ops/quality/dashboard")
+async def ops_quality_dashboard(
+    window_hours: float = 24.0,
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    """Production quality dashboard for operators (Phase 8)."""
+    from src.evaluation.quality_dashboard import build_quality_dashboard
+
+    return await asyncio.to_thread(build_quality_dashboard, window_hours=window_hours)
+
+
+@app.get("/ops/eval/runs")
+async def ops_eval_runs(
+    limit: int = 20,
+    _auth: None = Depends(verify_api_key),
+) -> list[dict[str, Any]]:
+    from src.evaluation.dataset_store import list_eval_runs
+
+    return await asyncio.to_thread(list_eval_runs, min(100, max(1, limit)))
+
+
+@app.get("/ops/eval/cases")
+async def ops_eval_cases(
+    status: str | None = None,
+    limit: int = 100,
+    _auth: None = Depends(verify_api_key),
+) -> list[dict[str, Any]]:
+    from src.evaluation.dataset_store import list_cases
+
+    return await asyncio.to_thread(list_cases, status=status, limit=min(500, max(1, limit)))
+
+
+@app.post("/ops/eval/run")
+async def ops_run_evaluation(
+    trigger: Literal["scheduled", "failure_driven"] = "scheduled",
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    """Trigger scheduled or failure-driven evaluation."""
+    from src.evaluation.continuous_eval import (
+        run_failure_driven_evaluation,
+        run_scheduled_evaluation,
+    )
+
+    def _run() -> dict[str, Any]:
+        result = (
+            run_scheduled_evaluation()
+            if trigger == "scheduled"
+            else run_failure_driven_evaluation()
+        )
+        return {
+            "trigger": result.trigger,
+            "run_id": result.run_id,
+            "manifest": result.manifest,
+            "gate_status": result.gate_report.overall_status,
+            "warnings": result.warnings,
+        }
+
+    return await asyncio.to_thread(_run)
+
+
+@app.get("/ops/drift")
+async def ops_drift_report(
+    window_hours: float = 24.0,
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    from src.evaluation.drift_detection import detect_quality_drift
+    from src.evaluation.retrieval_drift import detect_retrieval_drift
+
+    def _report() -> dict[str, Any]:
+        quality = detect_quality_drift(current_hours=window_hours)
+        retrieval = detect_retrieval_drift(current_hours=window_hours)
+        return {
+            "quality": {
+                "status": quality.status.value,
+                "metrics": quality.metrics,
+                "deltas": quality.deltas,
+                "warnings": quality.warnings,
+            },
+            "retrieval": {
+                "status": retrieval.status.value,
+                "deltas": retrieval.deltas,
+                "warnings": retrieval.warnings,
+            },
+        }
+
+    return await asyncio.to_thread(_report)
+
+
+@app.get("/ops/experiments")
+async def ops_list_experiments(
+    status: str | None = None,
+    _auth: None = Depends(verify_api_key),
+) -> list[dict[str, Any]]:
+    from src.evaluation.experiments import list_experiments
+
+    return await asyncio.to_thread(list_experiments, status=status)
+
+
+@app.get("/ops/documents/freshness")
+async def ops_document_freshness(
+    source: str,
+    _auth: None = Depends(verify_api_key),
+) -> dict[str, Any]:
+    from src.ingestion.document_registry import document_freshness
+
+    return await asyncio.to_thread(document_freshness, source)
 
 
 if __name__ == "__main__":

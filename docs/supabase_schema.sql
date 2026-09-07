@@ -78,6 +78,83 @@ $$;
 --   select purge_expired_chat_messages(30);
 
 -- ---------------------------------------------------------------------------
+-- Answer feedback (thumbs up/down + comments)
+-- ---------------------------------------------------------------------------
+-- Written by POST /feedback. Free text is PII-redacted by the API before
+-- insert. Same RLS posture as chat_messages: service role only.
+create table if not exists answer_feedback (
+  id text primary key,
+  rating text not null check (rating in ('up', 'down')),
+  question text not null,
+  answer text not null,
+  mode text default '',
+  comment text default '',
+  categories jsonb not null default '[]'::jsonb,
+  session_id text,
+  message_id text,
+  request_id text,
+  tenant_id text not null default 'default',
+  route text,
+  sources jsonb not null default '[]'::jsonb,
+  citations jsonb not null default '[]'::jsonb,
+  latency_ms double precision,
+  consensus_score double precision,
+  client text default 'web',
+  created_at timestamptz not null default now()
+);
+
+create index if not exists idx_answer_feedback_created_at
+  on answer_feedback (created_at desc);
+create index if not exists idx_answer_feedback_rating_mode
+  on answer_feedback (rating, mode);
+create index if not exists idx_answer_feedback_session
+  on answer_feedback (session_id);
+
+alter table answer_feedback enable row level security;
+revoke all on answer_feedback from anon, authenticated;
+
+-- Where is the system wrong? Negative rate per mode plus top failure tags.
+create or replace view answer_feedback_by_mode as
+select
+  mode,
+  count(*) filter (where rating = 'up')   as up,
+  count(*) filter (where rating = 'down') as down,
+  round(
+    count(*) filter (where rating = 'down')::numeric / greatest(count(*), 1), 3
+  ) as negative_rate
+from answer_feedback
+group by mode
+order by negative_rate desc;
+
+create or replace view answer_feedback_categories as
+select
+  mode,
+  category,
+  count(*) as n
+from answer_feedback, jsonb_array_elements_text(categories) as category
+where rating = 'down'
+group by mode, category
+order by n desc;
+
+-- Retention: feedback is training signal, keep it longer than chat, but
+-- still bounded. Adjust to your policy.
+create or replace function purge_expired_answer_feedback(retention_days int default 365)
+returns bigint
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  deleted bigint;
+begin
+  delete from answer_feedback
+   where created_at < now() - make_interval(days => retention_days);
+  get diagnostics deleted = row_count;
+  return deleted;
+end;
+$$;
+
+-- ---------------------------------------------------------------------------
 -- GDPR / CCPA erasure
 -- ---------------------------------------------------------------------------
 create or replace function delete_chat_session(target_session_id text)
@@ -91,6 +168,7 @@ declare
 begin
   delete from chat_messages where session_id = target_session_id;
   get diagnostics deleted = row_count;
+  delete from answer_feedback where session_id = target_session_id;
   return deleted;
 end;
 $$;

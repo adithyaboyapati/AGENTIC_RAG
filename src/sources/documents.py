@@ -25,5 +25,9 @@ def hit_to_document(
         "section_title": section or title,
         "score": float(score),
         "page": None,
+        # Shared reference catalog — public read, not tenant-owned content.
+        "tenant_id": "public",
+        "access_groups": "public",
+        "classification": "public",
     }
     return Document(page_content=content, metadata=meta)

@@ -34,7 +34,17 @@ def test_build_cache_key_stable_for_equivalent_questions():
     a = build_cache_key("What is RAG?", "crag")
     b = build_cache_key("  what   is   rag? ", "crag")
     assert a == b
-    assert a.startswith("rag:v1:crag:")
+    assert a.startswith("rag:v1:canonical-v1:crag:")
+
+
+def test_build_cache_key_separates_pipeline_versions():
+    from src.evaluation.pipeline_version import PIPELINE_CANONICAL_V1, PIPELINE_LEGACY
+
+    legacy = build_cache_key("What is RAG?", "crag", pipeline_version=PIPELINE_LEGACY)
+    canonical = build_cache_key(
+        "What is RAG?", "crag", pipeline_version=PIPELINE_CANONICAL_V1
+    )
+    assert legacy != canonical
 
 
 def test_build_cache_key_differs_by_mode():

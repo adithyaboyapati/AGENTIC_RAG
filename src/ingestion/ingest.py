@@ -101,19 +101,109 @@ def reset_collection() -> None:
     clear_parents()
     invalidate_cache()
 
+    _invalidate_retrieval_caches()
+
+
+def _invalidate_retrieval_caches() -> None:
+    """Drop BM25, exact-answer, and semantic caches after the index changes."""
     try:
         from src.retrieval.retriever import invalidate_bm25_cache
 
         invalidate_bm25_cache()
     except Exception:
-        pass
-
+        logger.warning("BM25 cache invalidate failed", exc_info=True)
     try:
         from src.cache.redis_cache import flush_answer_cache
 
-        flush_answer_cache()
+        flushed = flush_answer_cache()
+        if flushed:
+            logger.info("Flushed %d cached answer(s) after index change", flushed)
     except Exception:
-        logger.debug("Answer cache flush skipped during reset", exc_info=True)
+        logger.warning("Answer cache flush failed", exc_info=True)
+    try:
+        from src.cache.semantic_cache import get_semantic_cache
+
+        cleared = get_semantic_cache().clear()
+        if cleared:
+            logger.info("Cleared %d semantic-cache entries after index change", cleared)
+    except Exception:
+        logger.warning("Semantic cache clear failed", exc_info=True)
+
+
+def delete_chunks_for_source(source: str) -> int:
+    """Remove previously indexed chunks for a source path so edits cannot orphan."""
+    store = get_vector_store()
+    deleted = 0
+    try:
+        collection = store._collection  # noqa: SLF001
+        before = collection.count()
+        collection.delete(where={"source": str(source)})
+        after = collection.count()
+        deleted = max(0, before - after)
+        if deleted:
+            logger.info("Deleted %d stale chunk(s) for source=%s", deleted, source)
+    except Exception:
+        logger.warning("Source-level delete failed for %s", source, exc_info=True)
+    return deleted
+
+
+def remove_indexed_source(source: str) -> int:
+    """Delete a source by path and basename, then drop retrieval caches."""
+    if not (source or "").strip():
+        return 0
+    deleted = delete_chunks_for_source(source)
+    name = Path(source).name
+    if name and name != source:
+        deleted += delete_chunks_for_source(name)
+    _invalidate_retrieval_caches()
+    return deleted
+
+
+def list_indexed_documents() -> list[dict]:
+    """Aggregate unique sources currently in the vector store."""
+    store = get_vector_store()
+    try:
+        raw = store.get(include=["metadatas"])
+    except Exception:
+        logger.exception("Failed to list indexed documents")
+        return []
+
+    by_source: dict[str, dict] = {}
+    for meta in raw.get("metadatas") or []:
+        meta = meta or {}
+        source = str(meta.get("source") or "unknown")
+        entry = by_source.setdefault(
+            source,
+            {
+                "source": source,
+                "filename": Path(source).name or source,
+                "chunk_count": 0,
+                "tenant_id": str(meta.get("tenant_id") or "default"),
+                "pages": set(),
+            },
+        )
+        entry["chunk_count"] += 1
+        page = meta.get("page")
+        if page is not None:
+            try:
+                entry["pages"].add(int(page))
+            except (TypeError, ValueError):
+                pass
+
+    documents: list[dict] = []
+    for entry in by_source.values():
+        pages = sorted(entry["pages"])
+        documents.append(
+            {
+                "source": entry["source"],
+                "filename": entry["filename"],
+                "chunk_count": entry["chunk_count"],
+                "tenant_id": entry["tenant_id"],
+                "page_count": len(pages) if pages else None,
+            }
+        )
+    documents.sort(key=lambda d: d["filename"].lower())
+    return documents
 
 
 def chunk_content_id(doc: Document) -> str:
@@ -219,32 +309,34 @@ def ingest(
         ids.append(cid)
 
     vector_store = get_vector_store()
+    for pdf_path, _pages in loaded:
+        delete_chunks_for_source(str(pdf_path))
+        delete_chunks_for_source(pdf_path.name)
     try:
         vector_store.delete(ids=ids)
     except Exception:
         logger.debug("No prior chunk IDs to replace (first ingest or partial overlap)")
     vector_store.add_documents(all_children, ids=ids)
 
-    try:
-        from src.retrieval.retriever import invalidate_bm25_cache
-
-        invalidate_bm25_cache()
-    except Exception:
-        pass
-
-    try:
-        from src.cache.redis_cache import flush_answer_cache
-
-        flushed = flush_answer_cache()
-        if flushed:
-            print(f"Flushed {flushed} cached answer(s) after ingest")
-    except Exception:
-        logger.debug("Answer cache flush skipped after ingest", exc_info=True)
+    _invalidate_retrieval_caches()
 
     print(
         f"Indexed {len(all_children)} child chunks from {total_pages} pages "
         f"({len(all_parents)} parent sections, strategy={strategy})"
     )
+    try:
+        from src.ingestion.document_registry import register_document_ingest
+
+        for pdf_path, _pages in loaded:
+            source_chunks = sum(1 for c in all_children if str(c.metadata.get("source", "")).endswith(pdf_path.name))
+            register_document_ingest(
+                source=str(pdf_path),
+                filename=pdf_path.name,
+                chunk_count=source_chunks or len(all_children) // max(1, len(loaded)),
+                tenant_id=tenant_id or "default",
+            )
+    except Exception:
+        logger.debug("Document registry update skipped", exc_info=True)
     return len(all_children)
 
 
@@ -291,11 +383,13 @@ def ingest_documents(
             ids.append(cid)
 
         store = get_vector_store()
+        delete_chunks_for_source(str(p))
         try:
             store.delete(ids=ids)
         except Exception:
             pass
         store.add_documents(children, ids=ids)
+        _invalidate_retrieval_caches()
         return len(children)
 
     return ingest(

@@ -41,6 +41,13 @@ class RBACContext:
         """Normalized representation of roles for cache key generation."""
         return ",".join(sorted({r.strip().lower() for r in self.user_roles if r.strip()})) or "public"
 
+    _CLASSIFICATION_RANK = {
+        "public": 0,
+        "internal": 1,
+        "confidential": 2,
+        "secret": 3,
+    }
+
     def is_authorized(
         self,
         doc_tenant_id: str | None = None,
@@ -54,20 +61,31 @@ class RBACContext:
         if d_tenant not in (my_tenant, "global", "public", "*"):
             return False
 
-        # 2. Access groups / roles check
-        if doc_access_groups:
-            if isinstance(doc_access_groups, str):
-                groups = [g.strip().lower() for g in doc_access_groups.split(",") if g.strip()]
-            else:
-                groups = [str(g).strip().lower() for g in doc_access_groups]
+        my_roles = {r.strip().lower() for r in self.user_roles}
 
-            my_roles = {r.strip().lower() for r in self.user_roles}
-            if "admin" in my_roles or "*" in groups or "public" in groups:
-                return True
-            if not any(g in my_roles for g in groups):
-                return False
+        # 2. Classification: caller must meet or exceed the document level
+        # (admin still bypasses). Missing classification is treated as public.
+        doc_level = self._CLASSIFICATION_RANK.get(
+            (doc_classification or "public").strip().lower(), 0
+        )
+        my_level = self._CLASSIFICATION_RANK.get(
+            (self.classification or "public").strip().lower(), 0
+        )
+        if "admin" not in my_roles and doc_level > my_level:
+            return False
 
-        return True
+        # 3. Access groups / roles. Missing groups are public-only — never
+        # "unrestricted within tenant".
+        if isinstance(doc_access_groups, str):
+            groups = [g.strip().lower() for g in doc_access_groups.split(",") if g.strip()]
+        elif doc_access_groups:
+            groups = [str(g).strip().lower() for g in doc_access_groups]
+        else:
+            groups = ["public"]
+
+        if "admin" in my_roles or "*" in groups or "public" in groups:
+            return True
+        return any(g in my_roles for g in groups)
 
 
 @dataclass
@@ -87,5 +105,9 @@ class AgentResponse:
     tenant_id: str | None = None
     consensus_score: float | None = None
     critique_summary: str | None = None
-    # Set when a node-level output gate hard-stops the graph (poison / critical failure)
     error_code: str | None = None
+    verification_status: str | None = None
+    confidence: float | None = None
+    response_status: str | None = None
+    pipeline_version: str | None = None
+    request_id: str | None = None

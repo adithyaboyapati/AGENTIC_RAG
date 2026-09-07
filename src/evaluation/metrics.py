@@ -9,12 +9,15 @@ Evaluates RAG responses across 3 key dimensions:
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
 from src.prompts import ChatPromptTemplate
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -97,24 +100,31 @@ precision_chain = PRECISION_PROMPT | get_llm().with_structured_output(PrecisionS
 
 
 def evaluate_metrics(question: str, answer: str, context: str) -> RAGMetrics:
-    """Evaluate a RAG response across RAGAS metrics."""
-    try:
-        faithfulness = faithfulness_chain.invoke({"question": question, "answer": answer, "context": context}).score
-    except Exception as e:
-        print(f"⚠️ Faithfulness eval failed: {e}")
-        faithfulness = 0.5
+    """Evaluate a RAG response with LLM-as-judge scores.
 
-    try:
-        relevance = relevance_chain.invoke({"question": question, "answer": answer}).score
-    except Exception as e:
-        print(f"⚠️ Relevance eval failed: {e}")
-        relevance = 0.5
+    Judge failures are marked ``-1.0`` (not 0.5) so they cannot look average.
+    """
+    def _score(name: str, invoke) -> float:
+        try:
+            return float(invoke().score)
+        except Exception:
+            logger.warning("%s eval failed", name, exc_info=True)
+            return -1.0
 
-    try:
-        precision = precision_chain.invoke({"question": question, "context": context}).score
-    except Exception as e:
-        print(f"⚠️ Precision eval failed: {e}")
-        precision = 0.5
+    faithfulness = _score(
+        "Faithfulness",
+        lambda: faithfulness_chain.invoke(
+            {"question": question, "answer": answer, "context": context}
+        ),
+    )
+    relevance = _score(
+        "Relevance",
+        lambda: relevance_chain.invoke({"question": question, "answer": answer}),
+    )
+    precision = _score(
+        "Precision",
+        lambda: precision_chain.invoke({"question": question, "context": context}),
+    )
 
     return RAGMetrics(
         question=question,

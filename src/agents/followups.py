@@ -7,6 +7,7 @@ import logging
 from pydantic import BaseModel, Field
 
 from src.llm import get_llm
+from src.observability import optional_traceable
 from src.prompts import FOLLOWUP_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,7 @@ def _build_context(question: str, answer: str, sources: list[str]) -> str:
     return "\n\n".join(parts)
 
 
+@optional_traceable("generate_follow_ups", run_type="chain")
 def generate_follow_ups(
     question: str,
     answer: str,

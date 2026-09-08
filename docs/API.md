@@ -28,7 +28,7 @@ Public without key: `GET /health` only.
 |--------|------|-------------|
 | POST | `/query` | Synchronous query |
 | POST | `/query/stream` | SSE streaming query |
-| GET | `/modes` | Available modes (canonical + deprecated aliases) |
+| GET | `/modes` | Production modes (`canonical`, `source_tools`). Deprecated aliases still accepted on `/query`. |
 | GET | `/config` | Runtime config for UI (models, retrieval, flags) |
 
 ### Request body (`QueryRequest`)
@@ -45,7 +45,7 @@ Public without key: `GET /health` only.
 }
 ```
 
-**Preferred mode:** `canonical`. Legacy values (`agentic`, `baseline`, `crag`, …) are accepted, mapped internally, and emit deprecation metrics.
+**Public modes (`GET /modes`):** `canonical` (preferred) and `source_tools`. Legacy values (`agentic`, `baseline`, `crag`, …) are accepted on `/query`, mapped internally, and emit deprecation metrics.
 
 ### Response (`QueryResponse`)
 
@@ -54,11 +54,12 @@ Public without key: `GET /health` only.
 | `answer` | Generated answer |
 | `citations` | Chunk-level provenance |
 | `sources` | Human-readable source labels |
-| `route` / `route_reason` | Routing and strategy summary |
+| `route` / `route_reason` | Routing and strategy summary; on `source_tools`, tool names used |
+| `grade_summary` | CRAG grader summary (canonical evidence or source-tool hits) |
 | `verification_status` | Verification outcome |
 | `confidence` | Verification confidence when available |
 | `response_status` | `answered`, `answered_with_warning`, `abstained`, or error |
-| `pipeline_version` | e.g. `canonical-v1` |
+| `pipeline_version` | `canonical-v1` or `source-tools-v1` |
 | `request_id` | Correlation ID for feedback |
 | `latency_ms` | Wall-clock latency |
 | `error_code` | Set on guardrail abort or safe failure |

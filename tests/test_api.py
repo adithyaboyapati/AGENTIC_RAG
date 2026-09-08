@@ -249,3 +249,16 @@ def test_mcp_http_initialize_and_call(client, monkeypatch):
     assert called.status_code == 200
     text = called.json()["result"]["content"][0]["text"]
     assert "12%" in text
+
+
+def test_list_modes_exposes_public_modes_only(client):
+    resp = client.get("/modes")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body == {
+        "canonical": "Canonical Agentic RAG",
+        "source_tools": "Tool-selected sources",
+    }
+    assert "baseline" not in body
+    assert "agentic" not in body
+    assert "consensus" not in body

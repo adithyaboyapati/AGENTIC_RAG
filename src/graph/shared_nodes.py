@@ -14,6 +14,7 @@ from typing import Any, Literal
 from langchain_core.messages import HumanMessage
 
 from src.agents.router import RouteType, router_chain
+from src.observability import optional_traceable
 from src.chains.generation import direct_chain, web_search_chain
 from src.resilience.node_gate import (
     abort_user_message,
@@ -41,6 +42,7 @@ def router_step(route: str, reason: str) -> str:
     return f"Router → {route}: {reason}"
 
 
+@optional_traceable("classify_query", run_type="chain")
 def invoke_router(question: str) -> tuple[str, str]:
     decision = router_chain.invoke({"question": question})
     return decision.route.value, decision.reason

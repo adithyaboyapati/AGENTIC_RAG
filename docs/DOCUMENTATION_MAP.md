@@ -18,19 +18,23 @@ Use this map to find the authoritative document for each topic.
 | **Legacy retirement** | [LEGACY_RETIREMENT_INVENTORY.md](./LEGACY_RETIREMENT_INVENTORY.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [ROADMAP.md](./ROADMAP.md) |
 | **Roadmap / phases** | [ROADMAP.md](./ROADMAP.md) (with status labels) | — | [archive/](./archive/) |
 | **Interview prep** | — | — | [INTERVIEW_WALKTHROUGH.md](../INTERVIEW_WALKTHROUGH.md) (historical) |
-| **Observability** | [ARCHITECTURE.md](./ARCHITECTURE.md) § Observability | [LANGSMITH_TRACING.md](./LANGSMITH_TRACING.md) | — |
+| **Observability** | [LANGSMITH_TRACING.md](./LANGSMITH_TRACING.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) § Observability | — |
 | **Configuration** | [PRODUCTION.md](./PRODUCTION.md), `src/config.py` | `.env.example` | — |
 
 ## Current production summary
 
 ```text
-Client → FastAPI → Runner → Canonical Graph v1 → Response
+Client → FastAPI → Runner → Canonical Graph v1  (mode=canonical)
+                           → Source-tools graph  (mode=source_tools)
+                         → Response
 ```
 
-- **One production graph:** `src/graph/canonical_graph.py`
-- **One state model:** `CanonicalAgentState` (`src/contracts/state.py`)
-- **Preferred API mode:** `canonical` (legacy mode strings deprecated)
+- **Production graphs:** `src/graph/canonical_graph.py` (preferred) and `src/graph/source_tools_graph.py`
+- **Canonical state:** `CanonicalAgentState` (`src/contracts/state.py`)
+- **Public modes:** `canonical`, `source_tools` (`GET /modes`). Legacy mode strings still accepted on `/query`
+- **Source-tools:** LLM selects PDF / DB / API / MCP / calculator; source-backed hits are CRAG-graded
 - **Fallback:** safe abstention when canonical fails (`legacy_runtime_enabled=false` by default)
+- **Observability:** LangSmith parent span `agent_request:<mode>` nests retrieve, grade, graph, and follow-ups
 - **Continuous evaluation:** Phase 8 loop (`src/evaluation/continuous_eval.py`, `GET /ops/quality/dashboard`)
 
 ## Historical documents

@@ -51,23 +51,20 @@ else:
 
 ### Automatic Tracing (Enabled Globally)
 
-Once configured, **all LangChain operations are automatically traced** when you use the CLI, API, or Streamlit app.
+Once configured, **LangChain LLM calls are auto-traced**, and the runner wraps each query in a parent span so retrieve, grade, graph nodes, and follow-ups nest in one tree. Restart the API after changing `.env`.
 
 #### CLI
 ```bash
-# Traces automatically sent to LangSmith
-python -m src.cli ask "What is Self-RAG?" --mode crag -v
+python -m src.cli ask "What is Self-RAG?" --mode canonical -v
 ```
 
 #### API
 ```bash
-# Start server (tracing enabled)
-python -m uvicorn src.api.server:app --reload
+python -m uvicorn src.api.server:app --reload --port 8000
 
-# Make request (automatically traced)
 curl -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
-  -d '{"question": "What is Self-RAG?", "mode": "crag"}'
+  -d '{"question": "What is Self-RAG?", "mode": "canonical"}'
 ```
 
 #### Streamlit
@@ -86,11 +83,13 @@ Use the `traced_execution` context manager for custom tracing:
 from src.observability import traced_execution
 from src.runner import run_agent
 
-# Wrap code in context manager for custom tracing
+# Named parent span around a block of work
 with traced_execution("custom_workflow"):
-    result = run_agent("What is Self-RAG?", mode="crag")
+    result = run_agent("What is Self-RAG?", mode="canonical")
     print(result.answer)
 ```
+
+`run_agent()` / `stream_agent()` already open `agent_request:<mode>` — you usually do not need a manual wrap.
 
 ---
 
@@ -106,36 +105,33 @@ Navigate to your project: **"Agentic_RAG"** (or whatever you set `LANGSMITH_PROJ
 
 ### 3. View Traces
 
-Each execution appears as a trace with:
+Each query is **one parent run** (`agent_request:canonical` or `agent_request:source_tools`) with nested children — not a lone ChatOpenAI row.
 
-- **Input**: Question/query
-- **Output**: Answer
-- **Duration**: Execution time
-- **Steps**: Agent decisions, retrievals, generations
-- **Errors**: Any failures with stack traces
-
-### Example Trace Structure
-
-For a CRAG query:
+Example (`mode=canonical`):
 
 ```
-Query: "What is Self-RAG?"
-├── Route Decision
-│   └── Selected: retrieve
-├── Retrieval
-│   └── Retrieved 4 documents
-├── Grading
-│   ├── Doc 1: Relevant (0.9)
-│   ├── Doc 2: Relevant (0.8)
-│   ├── Doc 3: Not Relevant (0.2) → Rewrite
-│   └── Doc 4: Relevant (0.85)
-├── Query Rewrite
-│   └── Rewritten: "Explain Self-RAG grading mechanism"
-├── Retry Retrieval
-│   └── Retrieved 4 new documents
-└── Generation
-    └── Generated answer from top docs
+agent_request:canonical
+├── classify_query
+├── canonical_graph
+│   ├── retrieve          (hybrid / federation chunk ids)
+│   ├── grade_documents   (kept vs dropped, scores)
+│   ├── ChatOpenAI        (generate — prompt has question + context)
+│   └── verify / rewrite / … as taken
+└── generate_follow_ups
 ```
+
+Example (`mode=source_tools`):
+
+```
+agent_request:source_tools
+├── source_tools_graph
+│   ├── source_tool_retrieve   (query_mcp / query_api / …)
+│   ├── grade_documents        (source-backed hits only)
+│   └── ChatOpenAI             (tool-calling + final answer)
+└── generate_follow_ups
+```
+
+If you only see question / retrieved context / answer / follow-ups, you are looking at disconnected LLM calls (old process, or tracing disabled). Restart uvicorn after pulling this wiring (`src/observability.py`).
 
 ---
 
@@ -143,12 +139,16 @@ Query: "What is Self-RAG?"
 
 ### What Gets Traced
 
-✅ **Automatically traced**:
-- LLM calls (prompts, responses, tokens used)
-- Tool calls (retrieval, web search, etc.)
-- Agent decisions and reasoning
-- State transitions in LangGraph
+✅ **Traced in this repo**:
+- Parent request span (`agent_request:<mode>`) from arrival through follow-ups
+- Custom retrieve (hybrid / federation) and CRAG `grade_documents`
+- LangGraph runs (`canonical_graph`, `source_tools_graph`) with compact I/O
+- LLM calls (prompts, responses, tokens)
+- Source-tool retrieval (`source_tool_retrieve`)
+- Follow-up question generation
 - Errors and retries
+
+Calculator tool results are not document-graded.
 
 ### Performance Metrics
 
@@ -221,7 +221,7 @@ Run the same question with canonical mode (and optionally deprecated aliases for
 
 ```bash
 python -m src.cli ask "What is Self-RAG?" --mode canonical
-python -m src.cli ask "What is Self-RAG?" --mode crag   # deprecated alias → canonical strategy
+python -m src.cli ask "What is Self-RAG?" --mode canonical
 ```
 
 Then in LangSmith, compare traces side-by-side:
@@ -411,7 +411,7 @@ A: Set `LANGSMITH_TRACING=false` in environment, or remove API key.
 
 1. **Sign up at LangSmith**: https://smith.langchain.com
 2. **Get API key** and add to `.env`
-3. **Run a query**: `python -m src.cli ask "What is Self-RAG?" --mode crag`
+3. **Run a query**: `python -m src.cli ask "What is Self-RAG?" --mode canonical`
 4. **View trace** in LangSmith dashboard
 5. **Explore insights** from the trace
 

@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/LangGraph-orchestrated-purple.svg" alt="LangGraph" />
 </p>
 
-A question hits the **canonical Agentic RAG pipeline**: automatic routing, strategy selection, federated retrieval, evidence grading, verification, and citations. Retrieval is not PDF-only: matching hits from a SQLite research catalog, a sample ops API, and a lab MCP server are cited next to the corpus chunks. Every answer runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
+A question hits the **canonical Agentic RAG pipeline**: automatic routing, strategy selection, federated retrieval, evidence grading, verification, and citations. A second public mode, **Tool-selected sources**, lets the LLM pick PDF / SQLite / ops API / lab MCP / calculator tools and CRAG-grades source-backed hits before answering. Every answer runs through the same injection, PII/PHI, and rate/cost controls whether you use the React UI, CLI, Streamlit, or FastAPI.
 
 ```
 User Question
@@ -60,14 +60,15 @@ Concepts: [docs/CONCEPTS.md](docs/CONCEPTS.md). Architecture: [docs/ARCHITECTURE
 
 ## Agent modes
 
-Production uses a **single canonical pipeline** (`canonical_pipeline_version = v1`).
+Production uses a **canonical pipeline** (`canonical_pipeline_version = v1`) plus an optional tool-selected sources mode.
 
 | Client mode | Status | Behavior |
 |-------------|--------|----------|
-| `canonical` | **Preferred** | Full canonical graph with automatic strategy selection |
+| `canonical` | **Preferred** | Full canonical graph with automatic strategy selection; extra sources federate into retrieve |
+| `source_tools` | Available | LLM chooses PDF, SQLite catalog, ops API, lab MCP, or calculator; source hits are CRAG-graded |
 | `agentic`, `baseline`, `router`, `crag`, `decompose`, `multi_hop`, `tools`, `consensus` | Deprecated | Accepted for backward compatibility; mapped internally to canonical strategies; emits deprecation metrics |
 
-The UI exposes one production mode. Clients should use `POST /query` or `POST /query/stream` and consume **answer**, **citations**, **verification**, and **response_status** — not graph implementation details.
+The UI exposes the production modes. Clients should use `POST /query` or `POST /query/stream` and consume **answer**, **citations**, **verification**, and **response_status** — not graph implementation details.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/LEGACY_RETIREMENT_INVENTORY.md](docs/LEGACY_RETIREMENT_INVENTORY.md).
 
@@ -135,7 +136,7 @@ Full list and deploy notes: [docs/PRODUCTION.md](docs/PRODUCTION.md) · [docs/GU
 
 ```
 frontend/          React + Vite chat (SSE, citations, pipeline debug)
-src/graph/         Canonical graph v1 (+ shared nodes, evidence, verification)
+src/graph/         Canonical graph v1 + source_tools ReAct graph, evidence, verification
 src/contracts/     Canonical state, evidence, verification, API response
 src/retrieval/     Hybrid retrieve, rerank, compression, citations, federation
 src/sources/       SQLite catalog, sample ops API (/kb), lab MCP
@@ -168,7 +169,7 @@ docs/              Architecture, API, evaluation, deployment (see DOCUMENTATION_
 | [docs/PRODUCTION.md](docs/PRODUCTION.md) | Docker, cache, scaling |
 | [docs/GUARDRAILS.md](docs/GUARDRAILS.md) | Injection, rate limits, quality |
 | [docs/PRIVACY_COMPLIANCE.md](docs/PRIVACY_COMPLIANCE.md) | PII/PHI policy |
-| [docs/LANGSMITH_TRACING.md](docs/LANGSMITH_TRACING.md) | Tracing |
+| [docs/LANGSMITH_TRACING.md](docs/LANGSMITH_TRACING.md) | LangSmith parent-span traces (request → answer) |
 | [AGENTIC_RAG_DEEP_DIVE.md](AGENTIC_RAG_DEEP_DIVE.md) | **Historical** pre-canonical deep dive |
 | [LANGGRAPH_DEEP_DIVE.md](LANGGRAPH_DEEP_DIVE.md) | **Historical** seven-graph reference |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Pins, tests, PR loop |

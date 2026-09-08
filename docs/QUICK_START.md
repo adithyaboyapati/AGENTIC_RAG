@@ -71,9 +71,9 @@ python -m src.cli --help
 python -m src.cli ask "What is Self-RAG?" --mode canonical -v
 ```
 
-**Production mode:** `canonical` — one LangGraph workflow with strategy selection, retrieval loops, verification, and citations.
+**Production modes (`GET /modes`):** `canonical` (preferred LangGraph workflow) and `source_tools` (LLM picks PDF / DB / API / MCP / calculator; source hits are CRAG-graded).
 
-**Deprecated mode strings** (`baseline`, `router`, `crag`, `decompose`, `multi_hop`, `tools`, `agentic`, `consensus`) are still accepted for backward compatibility. They map to canonical strategies internally and emit deprecation metrics. Prefer `canonical` for new integrations.
+**Deprecated mode strings** (`baseline`, `router`, `crag`, `decompose`, `multi_hop`, `tools`, `agentic`, `consensus`) are still accepted for backward compatibility. They map to canonical strategies internally and emit deprecation metrics. Prefer `canonical` or `source_tools` for new integrations.
 
 ### Option D: REST API
 
@@ -139,10 +139,11 @@ python -m src.cli ask "Compare naive RAG and advanced RAG" --mode canonical -v
 python -m src.cli ask "What fallback does CRAG use when retrieval fails?" --mode canonical -v
 ```
 
-### 4. Multi-part / tool-assisted
+### 4. Multi-part / tool-selected sources
 ```bash
 python -m src.cli ask "What is 12 * 34 and what is Self-RAG?" --mode canonical -v
-python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode canonical -v
+python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode source_tools -v
+python -m src.cli ask "Who owns retriever-prod, what did experiment 42 conclude about parent-child chunking, and what is 12% of 0.84?" --mode source_tools -v
 ```
 
 ### 5. Complex synthesis
@@ -195,7 +196,7 @@ Agentic_RAG/
 │   ├── retrieval/                # hybrid/MMR, rerank, citations, federation
 │   ├── memory/                   # compact packing + optional Supabase
 │   ├── agents/                   # router, grader, decomposer, strategy helpers
-│   ├── graph/                    # canonical_graph.py + shared nodes
+│   ├── graph/                    # canonical_graph.py, source_tools_graph.py, shared nodes
 │   ├── tools/                    # retrieve_docs, query_database, web_search, …
 │   ├── sources/                  # SQLite catalog, sample ops API, lab MCP
 │   ├── api/

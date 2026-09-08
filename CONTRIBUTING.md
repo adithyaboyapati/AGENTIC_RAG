@@ -46,16 +46,16 @@ Both must pass before you push; CI runs the same commands plus coverage,
 - **Coverage is a ratchet.** `--cov-fail-under` sits just below the current
   number. If you raise coverage, raise the floor in `.github/workflows/ci.yml`.
 
-## Adding an agent mode
+## Adding a public mode
 
-1. Build the graph in `src/graph/`.
-2. Register it in `MODE_LABELS`, `MODE_DESCRIPTIONS`, `EXAMPLE_QUESTIONS`, and
-   `_dispatch` in `src/runner.py`.
-3. Add the value to `AgentMode` in `src/api/server.py`.
-4. Add a case to `tests/test_rag_graphs.py`.
+1. Build the graph in `src/graph/` (do **not** recreate deleted `tools_graph.py`).
+2. Register labels in `PUBLIC_MODE_LABELS`, `MODE_DESCRIPTIONS`, `EXAMPLE_QUESTIONS` in `src/runner.py`.
+3. Wire `_dispatch` (canonical strategy via `src/runner_modes.py`, or a dedicated `ask_*` like `ask_source_tools`).
+4. Add the value to `AgentMode` in `src/api/server.py`.
+5. Add the mode to `frontend/src/data/modes.ts` and `AgentMode` in `frontend/src/types.ts`.
+6. Cover it with tests (e.g. `tests/test_source_tools_graph.py`).
 
-Every mode inherits guardrails, privacy, caching, and cost tracking from
-`run_agent` — do not re-implement them inside a graph.
+Every mode inherits guardrails, privacy, caching, cost tracking, and the LangSmith parent span from `run_agent` / `stream_agent` — do not re-implement them inside a graph.
 
 ## Load testing
 

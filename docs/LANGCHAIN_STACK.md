@@ -38,7 +38,8 @@ and [PRODUCTION.md](PRODUCTION.md).
 
 | Module | Purpose |
 |--------|---------|
-| `src/graph/canonical_graph.py` | **Production graph** — classify → strategy → retrieve/grade/rewrite loops → generate → verify → finalize |
+| `src/graph/canonical_graph.py` | **Default production graph** — classify → strategy → retrieve/grade/rewrite loops → generate → verify → finalize |
+| `src/graph/source_tools_graph.py` | **Tool-selected sources** — LLM binds PDF / DB / API / MCP / calculator; source hits CRAG-graded |
 | `src/graph/shared_nodes.py` | Router invoke, direct answer, web search nodes |
 | `src/graph/evidence_management.py` | Evidence grading, deduplication, candidate processing |
 | `src/graph/context_builder.py` | Token-budgeted context construction for generation |
@@ -65,7 +66,7 @@ OpenAI or LangChain directly — they gate what reaches/leaves the chains above.
 
 | Module | Purpose |
 |--------|---------|
-| `src/runner.py` | Single dispatch — privacy → input guardrails → optional Redis cache → cost budget → **canonical graph** → follow-ups → output guardrails/privacy → cache write |
+| `src/runner.py` | Single dispatch — privacy → input guardrails → optional Redis cache → cost budget → **canonical or source_tools graph** → follow-ups → output guardrails/privacy → cache write |
 | `src/streaming.py` | ContextVar emitter + `stream_text` / `run_graph_streaming` for progressive SSE |
 | `src/guardrails.py` | Input validation, output validation, rate limiting, token/cost budget, quality checks (`RateLimitError`) |
 | `src/privacy.py` | PII/PHI regex detection, redaction, policy |
@@ -78,24 +79,25 @@ OpenAI or LangChain directly — they gate what reaches/leaves the chains above.
 | `src/api/rate_limit.py` | Per-client sliding-window limiter — Redis when `RATE_LIMIT_BACKEND` is `auto` or `redis`, else memory |
 | `src/api/metrics.py` | Prometheus counters/histograms (requests, latency, cache, LLM fallback, rate limits) |
 | `src/memory/supabase_store.py` | Optional persistent chat history (sync client — callers run it via `asyncio.to_thread`) |
-| `src/observability.py` / `src/bootstrap.py` | LangSmith tracing setup; `bootstrap.py` must be imported before any LangChain module |
+| `src/observability.py` / `src/bootstrap.py` | LangSmith: env bootstrap + parent span `agent_request:<mode>` nesting retrieve, grade, graph, follow-ups |
 | `monitoring/` | Prometheus scrape config + Grafana dashboard provisioning for local/compose |
 
 ## Pattern
 
 ```
-LangGraph StateGraph (canonical_graph.py)
+LangGraph StateGraph (canonical_graph.py | source_tools_graph.py)
   └── nodes call LangChain chains & tools
-  └── conditional edges for routing, retry loops, verification
+  └── conditional edges for routing, retry loops, verification (canonical)
+  └── source_tools: agent ⇄ tools (CRAG-grade source hits) → finalize
   └── CanonicalAgentState with reducers for evidence, steps, citations
 
 src.runner.run_agent() / stream_agent()  ← single entry for CLI / API / UIs
   └── guardrails + privacy + optional Redis cache
-  └── dispatches to ask_canonical() (deprecated mode strings map to strategies)
+  └── dispatches to ask_canonical() or ask_source_tools()
   └── token usage tracked via LangChain's get_openai_callback()
   └── follow-ups + citations assembled into AgentResponse
 ```
 
 Never call OpenAI or DuckDuckGo directly — always go through LangChain abstractions. Never
-call `ask_canonical` or graph nodes directly from CLI/API/UI code — always go through
+call `ask_canonical`, `ask_source_tools`, or graph nodes directly from CLI/API/UI code — always go through
 `src.runner.run_agent()` or `stream_agent()`, or guardrails, privacy, and caching are silently skipped.

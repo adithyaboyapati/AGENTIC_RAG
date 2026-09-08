@@ -117,7 +117,7 @@ export function PipelinePanel({
         </div>
       </header>
       <p className="debug-flow">
-        Query → Processing → Retrieval → Chunks → Rerank → Context → Generation → Answer
+        Query → Processing → Tools → Retrieval → Chunks → Rerank → Context → Generation → Answer
       </p>
       <div className="stage-list">
         {stages.map((stage, index) => (

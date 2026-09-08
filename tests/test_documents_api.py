@@ -145,6 +145,7 @@ def test_pipeline_payload_uses_backend_fields():
     assert ids == [
         "query",
         "processing",
+        "tools",
         "retrieval",
         "chunks",
         "rerank",

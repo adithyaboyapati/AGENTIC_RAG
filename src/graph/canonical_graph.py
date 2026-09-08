@@ -43,6 +43,7 @@ from src.graph.verification_engine import (
 from src.canonical_observability.canonical_metrics import record_verification_outcome
 from src.canonical_observability.canonical_timing import timed_node
 from src.canonical_observability.canonical_tracing import canonical_span
+from src.observability import graph_tracing_config
 from src.retrieval.canonical_adapter import (
     build_retrieval_plan,
     execute_retrieval_plan,
@@ -581,7 +582,7 @@ def build_canonical_graph():
     # Multi-hop reflect path: after grade when strategy is multi_hop and not sufficient
     # wired via metadata in grade condition - simplified: reflect inserted manually in tests
 
-    return graph.compile()
+    return graph.compile(name="canonical_agentic_rag")
 
 
 _canonical_graph = None
@@ -653,7 +654,18 @@ def ask_canonical(
             "strategy": state.strategy or "",
         },
     ):
-        result = run_graph_streaming(graph, graph_input(state))
+        result = run_graph_streaming(
+            graph,
+            graph_input(state),
+            config=graph_tracing_config(
+                "canonical_graph",
+                metadata={
+                    "request_id": request_id,
+                    "tenant_id": state.tenant_id,
+                    "force_strategy": force_strategy or "",
+                },
+            ),
+        )
     final = read_graph_state(result)
     final = merge_state(final, latency_ms=timer.elapsed_ms())
     return _to_canonical_response(final, timer)

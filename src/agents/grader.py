@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from src.config import settings
 from src.llm import get_llm
+from src.observability import optional_traceable
 from src.prompts import GRADER_PROMPT
 from src.retrieval.retriever import format_docs
 
@@ -38,6 +39,36 @@ class GradingResult(BaseModel):
 grader_chain = GRADER_PROMPT | get_llm().with_structured_output(GradingResult)
 
 
+def _grade_trace_inputs(inputs: dict) -> dict:
+    docs = inputs.get("documents") or []
+    return {
+        "question": inputs.get("question"),
+        "document_count": len(docs) if hasattr(docs, "__len__") else 0,
+    }
+
+
+def _grade_trace_outputs(result: tuple[list[Document], GradingResult]) -> dict:
+    kept, grading = result
+    return {
+        "kept": len(kept or []),
+        "grades": [
+            {
+                "chunk_index": g.chunk_index,
+                "relevant": g.relevant,
+                "score": g.score,
+            }
+            for g in (grading.grades if grading is not None else [])
+        ],
+        "summary": summarize_grades(grading) if grading is not None else "",
+    }
+
+
+@optional_traceable(
+    "grade_documents",
+    run_type="chain",
+    process_inputs=_grade_trace_inputs,
+    process_outputs=_grade_trace_outputs,
+)
 def grade_documents(question: str, documents: list[Document]) -> tuple[list[Document], GradingResult]:
     """
     Grade retrieved documents and return only those above the relevance threshold.

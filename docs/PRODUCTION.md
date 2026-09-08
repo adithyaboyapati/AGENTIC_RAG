@@ -206,8 +206,10 @@ Disable federation with `MULTI_SOURCE_ENABLED=false`.
 
 ```bash
 GET /modes
-→ {"canonical": "Canonical Agentic RAG (production)", ...}  # deprecated aliases may be listed
+→ {"canonical": "Canonical Agentic RAG", "source_tools": "Tool-selected sources"}
 ```
+
+Deprecated aliases are **not** listed here; they still work on `POST /query`.
 
 ### Query (Synchronous, authenticated + rate-limited)
 
@@ -554,7 +556,7 @@ Prometheus: `rag_node_gate_total{result="quarantine|abort"}`.
 - **Prometheus** — `GET /metrics` on the API; scrape + store via the `prometheus` compose service.
 - **Grafana** — pre-provisioned dashboard **Agentic RAG Overview** (compose service on `:3000`).
 - **Idempotency** — optional `Idempotency-Key` on `POST /query` (Redis-backed, 409 on body mismatch).
-- **LangSmith** — optional full LangChain/LangGraph traces when `LANGSMITH_TRACING=true`.
+- **LangSmith** — parent span `agent_request:<mode>` plus nested retrieve/grade/graph/LLM when `LANGSMITH_TRACING=true` (see [LANGSMITH_TRACING.md](LANGSMITH_TRACING.md)).
 - **Node gates** — quarantine/abort counters on `/metrics` (`rag_node_gate_total`).
 
 ### Prometheus + Grafana (local feel)

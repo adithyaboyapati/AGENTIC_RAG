@@ -57,9 +57,9 @@ The UI does not invent backend logic. It uses:
 - Markdown + fenced code with copy
 - Citation cards under answers (chunk, page, snippet, score)
 - Document upload and index management
-- Mode selector (`canonical` preferred) + read-only server configuration
+- Mode selector (`canonical` and `source_tools`) + read-only server configuration
 - Error banner when the API is unreachable
-- Developer/Debug panel: Query → Processing → Retrieval → Chunks → Rerank → Context → Generation → Answer, each expandable with the payload the backend returned
+- Developer/Debug panel: Query → Processing → **Tool Selection** → Retrieval → Chunks → Rerank → Context → Generation → Answer
 
 ## Project structure
 

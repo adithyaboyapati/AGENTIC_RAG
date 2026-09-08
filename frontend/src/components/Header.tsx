@@ -36,7 +36,11 @@ export function Header({
       <div className="header-actions">
         <label className="mode-select">
           <span>Mode</span>
-          <select value={mode} onChange={(e) => onModeChange(e.target.value as AgentMode)} aria-label="Agent mode">
+          <select
+            value={modes.some((m) => m.id === mode) ? mode : (modes[0]?.id ?? 'canonical')}
+            onChange={(e) => onModeChange(e.target.value as AgentMode)}
+            aria-label="Agent mode"
+          >
             {modes.map((m) => (
               <option key={m.id} value={m.id}>
                 {m.label}

@@ -1,6 +1,6 @@
-# LangGraph — Current Canonical Graph (v1)
+# LangGraph — Current Graphs (v1)
 
-**Status: CURRENT** — describes production code in `src/graph/canonical_graph.py`.
+**Status: CURRENT** — production graphs in `src/graph/canonical_graph.py` and `src/graph/source_tools_graph.py`.
 
 > Historical note: [LANGGRAPH_DEEP_DIVE.md](../LANGGRAPH_DEEP_DIVE.md) documents the **removed** seven-graph architecture (Phases 2–8). Do not use it for production behavior.
 
@@ -11,7 +11,7 @@
 | **Agent** | An LLM that makes a decision (router, grader, strategy selector, verifier when LLM enabled) |
 | **Workflow / Graph** | The compiled LangGraph `StateGraph` — deterministic control flow |
 | **Node** | A Python function registered on the graph; may call agents or deterministic code |
-| **Tool** | LangChain `@tool` callable (e.g. `web_search`, `calculator`) — **not** LLM-selectable in production today |
+| **Tool** | LangChain `@tool` callable. Canonical path uses federation, not LLM tool selection. `source_tools` mode lets the LLM pick PDF / DB / API / MCP / calculator |
 | **Application function** | Deterministic code: `retrieve()`, rerank, evidence processing, citation mapping |
 | **State** | `CanonicalAgentState` carried through the graph |
 | **Edge** | Fixed transition between nodes |
@@ -119,12 +119,30 @@ Built by `build_canonical_graph()` in `src/graph/canonical_graph.py`.
 
 ## Streaming
 
-`ask_canonical()` supports SSE via `src/streaming.py` — tokens and pipeline stages emitted to `/query/stream`.
+`run_agent()` / `stream_agent()` emit SSE via `src/streaming.py`. Canonical runs use `ask_canonical()`; tool-selected runs use `ask_source_tools()`. Tokens and pipeline stages go to `/query/stream`. Debug **Tool Selection** and **Reranking** stages light up from tool steps and `grade_summary`.
 
-## What is NOT in the production graph
+## Source-tools graph (`mode=source_tools`)
 
-- Separate compiled graphs per mode (router, crag, decompose, tools, consensus) — **removed**
-- In-graph ReAct tool loop (`tools_agent_node`) — **removed**
-- LLM-selectable retrieval tools in the graph — retrieval is **deterministic** via federation
+Separate compiled graph: `src/graph/source_tools_graph.py` (`pipeline_version=source-tools-v1`).
+
+```text
+START → agent (bind_tools) ⇄ tools → finalize → END
+```
+
+| Tool | What it queries | Graded? |
+|------|-----------------|---------|
+| `retrieve_pdf` | Indexed PDF corpus only (`include_extra=False`) | Yes — CRAG `grade_documents` |
+| `query_database` | SQLite research catalog | Yes |
+| `query_api` | Ops catalog (`/kb`) | Yes |
+| `query_mcp` | Lab notes MCP | Yes |
+| `calculator` | AST-safe arithmetic | No |
+
+If every chunk is graded out, the tool returns `[TOOL_EMPTY] No relevant evidence after grading` so the agent can try another source. Grader failures fail open (keep retrieved chunks). Bounded by `SOURCE_TOOLS_MAX_ROUNDS` (default 4).
+
+## What is NOT in the canonical graph
+
+- Separate compiled graphs per deprecated mode (router, crag, decompose, tools, consensus) — **removed**
+- In-graph ReAct tool loop on the **canonical** path — extra sources federate into `retrieve()` instead
+- LLM-selectable retrieval tools **inside canonical** — use `mode=source_tools` for that
 
 See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full request path.

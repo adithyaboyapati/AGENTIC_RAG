@@ -67,7 +67,7 @@
   <h1>Agentic RAG</h1>
   <p class="cover-sub">
     End-to-end walkthrough of the <strong>canonical production pipeline</strong>:
-    clients → FastAPI → runner → canonical graph v1 → verification → response.
+    clients → FastAPI → runner → canonical graph v1 <em>or</em> source-tools graph → response.
     Written from live code paths in <code>src/</code>.
   </p>
   <div class="cover-box">
@@ -79,8 +79,8 @@
   <div class="cover-meta">
     <div><strong>Edition:</strong> September 2026 (canonical v1)</div>
     <div><strong>Pipeline version:</strong> <code>canonical-v1</code></div>
-    <div><strong>Default mode:</strong> <code>canonical</code></div>
-    <div><strong>Canonical entry:</strong> <code>run_agent()</code> → <code>ask_canonical()</code></div>
+    <div><strong>Public modes:</strong> <code>canonical</code>, <code>source_tools</code></div>
+    <div><strong>Canonical entry:</strong> <code>run_agent()</code> → <code>ask_canonical()</code> or <code>ask_source_tools()</code></div>
     <div><strong>Stack:</strong> LangGraph · LangChain · FastAPI · Chroma · OpenAI · Redis · React</div>
   </div>
 </section>
@@ -147,13 +147,13 @@
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
 │  run_agent / stream_agent  ← single choke point                          │
-│  privacy → input guards → cache? → budget → ask_canonical() → post guards│
+│  privacy → guards → cache? → budget → ask_canonical | ask_source_tools   │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│  canonical_graph.py (LangGraph v1)                                       │
-│  classify → strategy → retrieve/grade/rewrite → context → generate       │
-│           → verify → finalize (+ citations, response_status)             │
+│  canonical_graph.py  OR  source_tools_graph.py                           │
+│  classify → retrieve/grade/rewrite → generate → verify                   │
+│  source_tools: agent ⇄ tools (CRAG-grade PDF/DB/API/MCP) → finalize      │
 └───────────────────────────────┬──────────────────────────────────────────┘
                                 ▼
      Chroma · Redis cache · Prometheus · Phase 8 production observer</div>
@@ -161,6 +161,7 @@
 <table>
   <tr><th>Mode key</th><th>Status</th><th>Behavior</th></tr>
   <tr><td><code>canonical</code></td><td><strong>Production</strong></td><td>Full canonical graph; strategy selected inside graph.</td></tr>
+  <tr><td><code>source_tools</code></td><td>Production</td><td>LLM picks PDF / SQLite / ops API / lab MCP / calculator; source hits are CRAG-graded.</td></tr>
   <tr><td><code>baseline</code>, <code>router</code>, <code>crag</code>, …</td><td>Deprecated</td><td>Accepted for compatibility; mapped to <code>force_strategy</code>; deprecation metrics emitted.</td></tr>
 </table>
 
@@ -169,7 +170,7 @@
   <tr><th>Layer</th><th>Responsibility</th><th>Primary modules</th></tr>
   <tr><td><strong>1. Interface</strong></td><td>HTTP, CLI, UI, SSE</td><td><code>src/api/server.py</code>, <code>documents.py</code>, <code>frontend/</code></td></tr>
   <tr><td><strong>2. Control plane</strong></td><td>Privacy, guards, cache, memory, budgets</td><td><code>runner.py</code>, <code>guardrails.py</code>, <code>cache/</code></td></tr>
-  <tr><td><strong>3. Canonical graph</strong></td><td>LangGraph workflow + verification</td><td><code>graph/canonical_graph.py</code>, <code>contracts/</code></td></tr>
+  <tr><td><strong>3. Graphs</strong></td><td>Canonical workflow + optional source-tools ReAct</td><td><code>graph/canonical_graph.py</code>, <code>source_tools_graph.py</code></td></tr>
   <tr><td><strong>4. Knowledge plane</strong></td><td>Ingest, hybrid retrieve, rerank, federation</td><td><code>ingestion/</code>, <code>retrieval/</code>, <code>sources/</code></td></tr>
   <tr><td><strong>5. Model &amp; tools</strong></td><td>LLM, chains, safe web fetch</td><td><code>llm.py</code>, <code>chains/</code>, <code>tools/safe_web.py</code></td></tr>
   <tr><td><strong>6. Evaluation</strong></td><td>Shadow, canary, continuous eval, gates</td><td><code>evaluation/</code>, <code>/ops/*</code></td></tr>
@@ -207,8 +208,10 @@
   → QueryResponse / SSE</div>
 
 <h3>4.2 Inside <code>_dispatch</code></h3>
-<p>File: <code>src/runner.py</code>. All modes route to the canonical graph:</p>
+<p>File: <code>src/runner.py</code>. Dispatch:</p>
 <pre>normalized = normalize_mode(mode)
+if normalized == "source_tools":
+    return ask_source_tools(question)
 strategy = resolve_canonical_strategy(normalized)  # deprecated aliases → strategy
 canonical = ask_canonical(question, force_strategy=strategy)
 return canonical_to_api_response(canonical, display_mode="canonical")</pre>
@@ -292,9 +295,10 @@ Deprecated API mode strings can force a strategy via <code>runner_modes.resolve_
   <tr><td>Verifier (optional LLM judge)</td><td>SSRF-safe web fetch, RBAC filters</td></tr>
 </table>
 <div class="card ok">
-  <div class="label">Not in production graph</div>
-  In-graph ReAct tool loop and seven separate mode graphs were removed in Phase 7.
-  <code>@tool</code> wrappers remain for federation tests and deterministic helpers — not LLM-selectable in the canonical graph.
+  <div class="label">Two production graphs</div>
+  Canonical path: extra sources federate into <code>retrieve()</code> — no LLM tool picker.
+  <code>mode=source_tools</code> is a separate ReAct graph: the LLM chooses PDF / DB / API / MCP / calculator;
+  PDF/DB/API/MCP hits are CRAG-graded before they become citations. Calculator is not graded.
 </div>
 
 <div class="page-break"></div>
@@ -336,7 +340,7 @@ Deprecated API mode strings can force a strategy via <code>runner_modes.resolve_
   <tr><td>Quality dashboard</td><td><code>GET /ops/quality/dashboard</code></td></tr>
   <tr><td>Legacy retirement status</td><td><code>GET /ops/legacy/retirement</code></td></tr>
   <tr><td>Feedback loop</td><td><code>POST /feedback</code>, <code>feedback_classifier.py</code></td></tr>
-  <tr><td>Metrics</td><td><code>GET /metrics</code> — includes canonical, canary, deprecated-mode counters</td></tr>
+  <tr><td>LangSmith</td><td>Parent span <code>agent_request:&lt;mode&gt;</code> nesting retrieve, grade, graph, follow-ups</td></tr>
 </table>
 <p>Defaults: <code>CANONICAL_PRIMARY=true</code>, <code>LEGACY_RUNTIME_ENABLED=false</code>, <code>CONTINUOUS_EVAL_ENABLED=true</code>.</p>
 
@@ -361,6 +365,8 @@ uvicorn src.api.server:app --reload --port 8000   # local dev</pre>
 <table>
   <tr><th>Group</th><th>Examples</th></tr>
   <tr><td>Canonical</td><td><code>CANONICAL_PRIMARY</code>, <code>LEGACY_RUNTIME_ENABLED</code>, <code>canonical_verification_llm_enabled</code></td></tr>
+  <tr><td>Source-tools</td><td><code>SOURCE_TOOLS_MAX_ROUNDS</code></td></tr>
+  <tr><td>Observability</td><td><code>LANGSMITH_TRACING</code>, <code>LANGSMITH_PROJECT</code></td></tr>
   <tr><td>Retrieval</td><td><code>RETRIEVAL_SEARCH_TYPE</code>, <code>RETRIEVAL_TOP_K</code>, <code>RERANK_PROVIDER</code></td></tr>
   <tr><td>Security</td><td><code>API_KEY</code>, <code>REQUIRE_API_KEY</code>, <code>TRUST_CLIENT_RBAC</code></td></tr>
   <tr><td>Cache</td><td><code>CACHE_ENABLED</code>, <code>REDIS_URL</code>, semantic cache thresholds</td></tr>
@@ -372,7 +378,9 @@ uvicorn src.api.server:app --reload --port 8000   # local dev</pre>
 <table>
   <tr><th>Path</th><th>Owns</th></tr>
   <tr><td><code>src/runner.py</code></td><td>Choke point: guards, cache, dispatch to canonical</td></tr>
-  <tr><td><code>src/graph/canonical_graph.py</code></td><td>Production LangGraph</td></tr>
+  <tr><td><code>src/graph/canonical_graph.py</code></td><td>Default production LangGraph</td></tr>
+  <tr><td><code>src/graph/source_tools_graph.py</code></td><td>LLM-selected sources + CRAG grade</td></tr>
+  <tr><td><code>src/observability.py</code></td><td>LangSmith parent spans</td></tr>
   <tr><td><code>src/contracts/</code></td><td>State, evidence, verification, API response mapping</td></tr>
   <tr><td><code>src/retrieval/canonical_adapter.py</code></td><td>Deterministic retrieval boundary</td></tr>
   <tr><td><code>src/evaluation/</code></td><td>Shadow, canary, continuous eval, regression gates</td></tr>
@@ -393,7 +401,8 @@ uvicorn src.api.server:app --reload --port 8000   # local dev</pre>
 <h2>15. Tests that document behavior</h2>
 <table>
   <tr><th>File</th><th>Documents</th></tr>
-  <tr><td><code>tests/test_canonical_graph.py</code></td><td>Graph topology, nodes, verification path</td></tr>
+  <tr><td><code>tests/test_source_tools_graph.py</code></td><td>Tool-selected sources + CRAG drop/keep</td></tr>
+  <tr><td><code>tests/test_observability.py</code></td><td>LangSmith parent-span wiring (disabled in pytest)</td></tr>
   <tr><td><code>tests/test_canonical_production.py</code></td><td>Runner dispatch, API response fields</td></tr>
   <tr><td><code>tests/test_phase8_continuous_eval.py</code></td><td>Continuous eval loop, dashboard</td></tr>
   <tr><td><code>tests/test_shadow_evaluation.py</code></td><td>Shadow paired comparison</td></tr>
@@ -406,6 +415,9 @@ uvicorn src.api.server:app --reload --port 8000   # local dev</pre>
 <h2>16. Worked traces</h2>
 <pre># Canonical (preferred)
 python -m src.cli ask "What is Self-RAG?" --mode canonical -v
+
+# Tool-selected sources (API + MCP + optional calculator)
+python -m src.cli ask "Who owns retriever-prod and what did experiment 42 conclude about chunking?" --mode source_tools -v
 
 # Comparison / strategy selection visible in steps
 python -m src.cli ask "Compare naive RAG and advanced RAG" --mode canonical -v

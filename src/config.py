@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     max_retrieval_retries: int = 2
     grader_relevance_threshold: float = 0.5
     max_multi_hop_steps: int = 3
+    # LLM-selected PDF / DB / API / MCP tool loop (source_tools mode)
+    source_tools_max_rounds: int = 4
 
     # Optional online quality checks (extra LLM calls — off by default)
     quality_guardrails_enabled: bool = False

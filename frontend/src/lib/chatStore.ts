@@ -1,3 +1,4 @@
+import { normalizeMode } from '../data/modes'
 import type { AgentMode, ChatMessage, StoredChat, ChatStoreData } from '../types'
 
 export const CHAT_STORE_KEY = 'agentic-rag-chats-v1'
@@ -82,6 +83,7 @@ export function loadChatStore(): ChatStoreData {
     if (!parsed.chats.some((c) => c.id === parsed.activeChatId)) {
       parsed.activeChatId = parsed.chats[0].id
     }
+    parsed.chats = parsed.chats.map((c) => ({ ...c, mode: normalizeMode(c.mode) }))
     return parsed
   } catch {
     const chat = createEmptyChat()

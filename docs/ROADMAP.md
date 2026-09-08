@@ -1,6 +1,7 @@
 # Learning Roadmap — Phase by Phase
 
 > **Migration status (2026):** Phases 1–6 built the multi-graph system; **Phase 7** consolidated to canonical graph v1 and retired legacy runtime; **Phase 8 (continuous eval)** added the production improvement loop.  
+> **Later:** public `source_tools` mode (`src/graph/source_tools_graph.py`) — LLM-selected PDF / DB / API / MCP / calculator with CRAG grading. Canonical remains preferred.  
 > **Current production docs:** [ARCHITECTURE.md](./ARCHITECTURE.md) · [DOCUMENTATION_MAP.md](./DOCUMENTATION_MAP.md)  
 > Below is **historical build history** — removed file paths are intentional.
 

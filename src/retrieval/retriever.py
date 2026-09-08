@@ -11,6 +11,7 @@ from langchain_core.vectorstores import VectorStoreRetriever
 
 from src.config import settings
 from src.ingestion.ingest import get_vector_store
+from src.observability import optional_traceable
 from src.retrieval.context import current_rbac
 from src.retrieval.reranker import rerank_documents
 from src.schemas import RBACContext
@@ -290,6 +291,36 @@ def _attach_extra_sources(
     return merge_with_pdf(docs, extra)
 
 
+def _retrieve_trace_inputs(inputs: dict) -> dict:
+    return {
+        "query": inputs.get("query"),
+        "top_k": inputs.get("top_k"),
+        "include_extra": inputs.get("include_extra"),
+    }
+
+
+def _retrieve_trace_outputs(docs: list[Document]) -> dict:
+    if not isinstance(docs, list):
+        return {"count": 0}
+    return {
+        "count": len(docs),
+        "chunks": [
+            {
+                "chunk_id": (doc.metadata or {}).get("chunk_id"),
+                "source": (doc.metadata or {}).get("source"),
+                "source_type": (doc.metadata or {}).get("source_type"),
+            }
+            for doc in docs[:20]
+        ],
+    }
+
+
+@optional_traceable(
+    "retrieve",
+    run_type="retriever",
+    process_inputs=_retrieve_trace_inputs,
+    process_outputs=_retrieve_trace_outputs,
+)
 def retrieve(
     query: str,
     top_k: int | None = None,

@@ -180,7 +180,12 @@ Hop 3: Synthesize
 | Calculator       | Numeric computation                                     |
 
 
-**Agentic behavior:** Agent picks the right tool for each sub-task.
+**Agentic behavior:** In **Tool-selected sources** (`mode=source_tools`) the LLM picks tools, then CRAG-grades PDF/DB/API/MCP hits before answering. On the **canonical** path, the same extra sources federate into `retrieve()` — the model does not choose tools. Calculator is never graded.
+
+Demo questions that should fire 2–3 tools:
+
+- `Who owns retriever-prod and what did experiment 42 conclude about chunking?`
+- `How many citations does the Self-RAG paper have, who owns retriever-prod, and what did exp-17 conclude about RRF k?`
 
 ---
 
@@ -376,7 +381,8 @@ Real enterprise documents contain rich tabular matrices and visual diagrams:
 ### 10. Multi-Source Retrieval
 
 Not every answer lives in `rag.pdf`. Federated retrieve (`src/sources/`) prepends matching
-SQLite / ops-API / MCP hits to PDF chunks; tools mode can target a source explicitly.
+SQLite / ops-API / MCP hits to PDF chunks. `mode=source_tools` lets the LLM target a source
+explicitly and grades those hits before citing them.
 Catalog values are demo data — cite `db://`, `api://`, and `lab://` URIs rather than treating
 them as live production metrics.
 

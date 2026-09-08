@@ -147,22 +147,53 @@ def stream_llm_message(llm: Any, messages: list) -> Any:
     return response
 
 
-def run_graph_streaming(graph: Any, initial_state: dict) -> dict:
+def run_graph_streaming(graph: Any, initial_state: dict, *, config: dict | None = None) -> dict:
     """Run a compiled LangGraph, emitting steps as nodes complete.
 
     Uses ``stream_mode="values"`` so step lists accumulate correctly under
-    ``Annotated[..., operator.add]``.
+    ``Annotated[..., operator.add]``. When LangSmith is on, wraps the stream in
+    a parent span so node/LLM children nest instead of appearing as root runs.
     """
-    final: dict | None = None
-    seen_steps = 0
-    for state in graph.stream(initial_state, stream_mode="values"):
-        final = state
-        steps = state.get("steps") or []
-        if _emitter.get() is not None:
-            while seen_steps < len(steps):
-                emit_step(steps[seen_steps])
-                seen_steps += 1
-    return final if final is not None else initial_state
+    from src.observability import is_tracing_enabled, safe_graph_io
+
+    cfg = dict(config or {})
+    run_name = str(cfg.get("run_name") or "langgraph")
+
+    def _stream() -> dict:
+        final: dict | None = None
+        seen_steps = 0
+        stream_kwargs: dict[str, Any] = {"stream_mode": "values", "config": cfg}
+        for state in graph.stream(initial_state, **stream_kwargs):
+            final = state
+            steps = state.get("steps") or []
+            if _emitter.get() is not None:
+                while seen_steps < len(steps):
+                    emit_step(steps[seen_steps])
+                    seen_steps += 1
+        return final if final is not None else initial_state
+
+    if not is_tracing_enabled():
+        return _stream()
+
+    try:
+        from langsmith import trace
+    except Exception:
+        return _stream()
+
+    with trace(
+        name=run_name,
+        run_type="chain",
+        inputs=safe_graph_io(initial_state),
+        tags=["agentic-rag", "langgraph", run_name],
+        metadata=dict(cfg.get("metadata") or {}),
+    ) as run:
+        result = _stream()
+        if run is not None:
+            try:
+                run.add_outputs(safe_graph_io(result))
+            except Exception:
+                logger.debug("LangSmith graph outputs skipped", exc_info=True)
+        return result
 
 
 def iter_queue_events(event_iter: Iterator[StreamEvent | None]) -> Iterator[StreamEvent]:

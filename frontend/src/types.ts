@@ -1,4 +1,4 @@
-export type AgentMode = 'canonical' | 'agentic'
+export type AgentMode = 'canonical' | 'source_tools' | 'agentic'
 
 export interface ModeMeta {
   id: AgentMode
@@ -21,6 +21,7 @@ export interface Citation {
 export type PipelineStageId =
   | 'query'
   | 'processing'
+  | 'tools'
   | 'retrieval'
   | 'chunks'
   | 'rerank'

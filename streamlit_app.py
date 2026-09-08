@@ -25,7 +25,7 @@ from src.memory.supabase_store import (
     save_message,
 )
 from src.observability import get_tracing_status, init_langsmith_tracing
-from src.runner import EXAMPLE_QUESTIONS, MODE_DESCRIPTIONS, MODE_LABELS, run_agent
+from src.runner import EXAMPLE_QUESTIONS, MODE_DESCRIPTIONS, MODE_LABELS, PUBLIC_MODE_LABELS, run_agent
 
 setup_logging()
 init_langsmith_tracing()
@@ -131,8 +131,8 @@ def main() -> None:
 
         mode = st.selectbox(
             "Agent mode",
-            options=list(MODE_LABELS.keys()),
-            format_func=lambda k: MODE_LABELS[k],
+            options=list(PUBLIC_MODE_LABELS.keys()),
+            format_func=lambda k: PUBLIC_MODE_LABELS[k],
         )
         st.markdown(f"_{MODE_DESCRIPTIONS[mode]}_")
 

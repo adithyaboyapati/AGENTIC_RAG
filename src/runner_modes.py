@@ -21,7 +21,9 @@ DEPRECATED_LEGACY_MODES = frozenset(
     }
 )
 
-PUBLIC_MODES = frozenset({"canonical", *DEPRECATED_LEGACY_MODES})
+PUBLIC_MODES = frozenset({"canonical", "source_tools", *DEPRECATED_LEGACY_MODES})
+
+SOURCE_TOOLS_MODE = "source_tools"
 
 MODE_TO_CANONICAL_STRATEGY: dict[str, str | None] = {
     "baseline": "simple",
@@ -33,6 +35,7 @@ MODE_TO_CANONICAL_STRATEGY: dict[str, str | None] = {
     "agentic": None,
     "consensus": None,
     "canonical": None,
+    "source_tools": None,
     "canonical-simple": "simple",
     "canonical-decompose": "decompose",
     "canonical-multi-hop": "multi_hop",

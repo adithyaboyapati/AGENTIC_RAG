@@ -21,7 +21,7 @@ flowchart TB
     Runner[Runner src/runner.py]
     Cache[Redis exact + semantic cache]
     Guard[Guardrails + Privacy]
-    Graph[Canonical Graph v1]
+    Graph[Canonical Graph v1 or Source-tools graph]
     Verify[Verification + Citations]
     Obs[Production observer Phase 8]
     Response[QueryResponse]
@@ -39,14 +39,15 @@ flowchart TB
 |-------|---------|----------------|
 | **API** | `src/api/server.py`, `documents.py`, `health.py`, `metrics.py` | HTTP, SSE, auth, ops endpoints |
 | **Runner** | `src/runner.py`, `src/runner_modes.py` | Dispatch, cache, budget, guardrails, mode deprecation |
-| **Canonical graph** | `src/graph/canonical_graph.py` | Single LangGraph workflow |
+| **Canonical graph** | `src/graph/canonical_graph.py` | Default LangGraph workflow |
+| **Source-tools graph** | `src/graph/source_tools_graph.py` | LLM-selected PDF / DB / API / MCP / calculator + CRAG grade |
 | **Contracts** | `src/contracts/` | State, evidence, verification, API mapping |
 | **Retrieval** | `src/retrieval/`, `src/sources/` | Hybrid retrieve, federation, rerank, RBAC |
 | **Ingestion** | `src/ingestion/`, `document_registry.py` | Chunk, embed, version documents |
 | **Security** | `src/security/`, `guardrails.py`, `privacy.py` | Injection, PII, rate limits |
 | **Cache** | `src/cache/` | Redis exact + semantic (pipeline-version keyed) |
 | **Evaluation** | `src/evaluation/` | Shadow, canary, continuous eval, gates |
-| **Observability** | `src/canonical_observability/`, Prometheus | Node timing, verification metrics, OTEL optional |
+| **Observability** | `src/observability.py`, `src/canonical_observability/`, Prometheus | LangSmith parent traces, node timing, OTEL optional |
 
 ## Canonical graph stages
 
@@ -83,7 +84,9 @@ Detail: [LANGGRAPH.md](./LANGGRAPH.md).
 | Verifier (optional) | Token budgeting, cache keys |
 | Web search synthesis | SSRF-safe URL validation |
 
-Production does **not** expose an in-graph ReAct tool loop. `@tool` wrappers in `all_tools.py` support federation tests and deterministic `documents_for_tool()` — not LLM tool selection in the canonical graph.
+Production **canonical** graph does **not** expose an in-graph ReAct tool loop. Extra sources federate into `retrieve()` when `MULTI_SOURCE_ENABLED=true`. `@tool` wrappers in `all_tools.py` support federation tests.
+
+**Tool-selected sources** (`mode=source_tools`) is a separate public graph (`source_tools_graph.py`): the LLM chooses `retrieve_pdf`, `query_database`, `query_api`, `query_mcp`, or `calculator`. PDF/DB/API/MCP hits are CRAG-graded (`grade_documents`) before they return to the model or become citations. Calculator results are not graded.
 
 ## Retrieval pipeline
 
@@ -125,13 +128,13 @@ See [GUARDRAILS.md](./GUARDRAILS.md).
 - Canonical node latency: `rag_canonical_*` metrics
 - Phase 8 dashboard: `GET /ops/quality/dashboard`
 - Optional OpenTelemetry: `otel_enabled=true`
-- LangSmith: [LANGSMITH_TRACING.md](./LANGSMITH_TRACING.md)
+- LangSmith: parent span `agent_request:<mode>` wrapping classify, retrieve, grade, graph nodes, generation, and follow-ups — [LANGSMITH_TRACING.md](./LANGSMITH_TRACING.md)
 
 ## Deprecated client modes
 
 API accepts legacy mode strings for backward compatibility; they map to canonical strategies via `runner_modes.py` and emit `rag_deprecated_mode_requests_total`.
 
-**Preferred:** `mode=canonical`.
+**Public modes (`GET /modes`):** `canonical` (preferred) and `source_tools`.
 
 ## Scaling model
 

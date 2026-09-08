@@ -52,7 +52,7 @@ from src.config import is_production, settings
 from src.guardrails import RateLimitError
 from src.logging_config import get_request_id, set_request_id, setup_logging
 from src.observability import init_langsmith_tracing
-from src.runner import MODE_LABELS, run_agent, stream_agent
+from src.runner import PUBLIC_MODE_LABELS, run_agent, stream_agent
 from src.api.documents import router as documents_router
 from src.sources.mcp_server import mcp_router
 from src.sources.sample_api import router as kb_router
@@ -175,6 +175,7 @@ app.include_router(documents_router)
 
 class AgentMode(str, Enum):
     canonical = "canonical"
+    source_tools = "source_tools"
     agentic = "agentic"  # deprecated alias — maps to canonical
     baseline = "baseline"  # deprecated
     router = "router"  # deprecated
@@ -435,7 +436,7 @@ async def prometheus_metrics(
 
 @app.get("/modes")
 async def list_modes(_: None = Depends(verify_api_key)) -> dict[str, str]:
-    return MODE_LABELS
+    return PUBLIC_MODE_LABELS
 
 
 @app.get("/ops/legacy/retirement")

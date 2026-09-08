@@ -8,7 +8,7 @@ import {
   streamQuery,
   submitFeedback,
 } from '../api/client'
-import { MODES } from '../data/modes'
+import { isPublicMode, MODES } from '../data/modes'
 import {
   applyGenerationStarted,
   applyLiveStep,
@@ -117,16 +117,18 @@ export function useChat() {
     fetchModes()
       .then((labels) => {
         if (cancelled) return
-        const fromApi: ModeMeta[] = Object.entries(labels).map(([id, label]) => {
-          const fallback = MODES.find((m) => m.id === id)
-          return {
-            id: id as AgentMode,
-            label,
-            phase: fallback?.phase ?? '',
-            description: fallback?.description ?? label,
-            example: fallback?.example ?? '',
-          }
-        })
+        const fromApi: ModeMeta[] = Object.entries(labels)
+          .filter(([id]) => isPublicMode(id))
+          .map(([id, label]) => {
+            const fallback = MODES.find((m) => m.id === id)
+            return {
+              id: id as AgentMode,
+              label,
+              phase: fallback?.phase ?? 'Production',
+              description: fallback?.description ?? label,
+              example: fallback?.example ?? '',
+            }
+          })
         if (fromApi.length) setAvailableModes(fromApi)
       })
       .catch(() => {
@@ -156,7 +158,7 @@ export function useChat() {
 
   const setMode = useCallback(
     (next: AgentMode) => {
-      updateActiveChat((c) => ({ ...c, mode: next }))
+      updateActiveChat((c) => ({ ...c, mode: isPublicMode(next) ? next : 'canonical' }))
     },
     [updateActiveChat],
   )

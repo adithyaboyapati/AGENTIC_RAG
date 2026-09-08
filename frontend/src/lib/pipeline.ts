@@ -8,6 +8,7 @@ import type {
 export const PIPELINE_STAGES: { id: PipelineStageId; label: string }[] = [
   { id: 'query', label: 'User Query' },
   { id: 'processing', label: 'Query Processing' },
+  { id: 'tools', label: 'Tool Selection' },
   { id: 'retrieval', label: 'Retrieval' },
   { id: 'chunks', label: 'Retrieved Chunks' },
   { id: 'rerank', label: 'Reranking' },
@@ -67,11 +68,15 @@ export function classifyStep(step: string): PipelineStageId {
     return 'generation'
   }
   if (
+    s.includes('tool')
+  ) {
+    return 'tools'
+  }
+  if (
     s.includes('route') ||
     s.includes('decompos') ||
     s.includes('sub-query') ||
     s.includes('hop') ||
-    s.includes('tool') ||
     s.includes('strateg')
   ) {
     return 'processing'

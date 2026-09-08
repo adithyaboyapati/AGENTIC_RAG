@@ -43,7 +43,9 @@ python -m src.cli ask "What is Self-RAG?" --mode canonical -v
 ```
 
 Then view the trace at [smith.langchain.com](https://smith.langchain.com), project
-matching `LANGSMITH_PROJECT`.
+matching `LANGSMITH_PROJECT`. You should see a parent `agent_request:canonical` tree
+(classify → retrieve → grade → generate → follow-ups), not a single ChatOpenAI call.
+Restart the API after enabling tracing.
 
 ## Separate Projects per Environment
 

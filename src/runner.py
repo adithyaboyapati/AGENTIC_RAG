@@ -23,8 +23,10 @@ from src.guardrails import (
 )
 from src.memory.chat_memory import augment_question_with_history
 from src.privacy import PrivacyGuard, get_privacy_policy
+from src.observability import agent_request_trace, record_response_outputs
 from src.retrieval.context import use_rbac_context
 from src.runner_modes import (
+    SOURCE_TOOLS_MODE,
     is_deprecated_mode,
     normalize_mode,
     record_deprecated_mode_usage,
@@ -36,8 +38,14 @@ logger = logging.getLogger(__name__)
 
 CANONICAL_PIPELINE_VERSION = "v1"
 
-MODE_LABELS = {
+# Shown in UI / GET /modes. Deprecated aliases still work on /query.
+PUBLIC_MODE_LABELS = {
     "canonical": "Canonical Agentic RAG",
+    "source_tools": "Tool-selected sources",
+}
+
+MODE_LABELS = {
+    **PUBLIC_MODE_LABELS,
     "agentic": "Canonical Agentic RAG (deprecated alias)",
     "baseline": "Deprecated — maps to canonical",
     "router": "Deprecated — maps to canonical",
@@ -50,20 +58,27 @@ MODE_LABELS = {
 
 MODE_DESCRIPTIONS = {
     "canonical": "Unified canonical pipeline with strategy selection, evidence, and verification.",
+    "source_tools": "The LLM chooses among PDF, SQLite catalog, ops API, lab MCP, and calculator; source hits are CRAG-graded before answering.",
     "agentic": "Deprecated alias for the canonical pipeline.",
 }
 
 EXAMPLE_QUESTIONS = {
     "canonical": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
+    "source_tools": "Who owns retriever-prod and what did experiment 42 conclude about chunking?",
     "agentic": "Compare RAG vs Agentic RAG; what is Self-RAG grading?",
 }
 
 
 def _dispatch(question: str, mode: str) -> AgentResponse:
-    """Run the canonical workflow (deprecated mode names map to strategies)."""
+    """Run canonical Agentic RAG, or the source-tools ReAct loop."""
+    normalized = normalize_mode(mode)
+    if normalized == SOURCE_TOOLS_MODE:
+        from src.graph.source_tools_graph import ask_source_tools
+
+        return ask_source_tools(question)
+
     from src.graph.canonical_graph import ask_canonical
 
-    normalized = normalize_mode(mode)
     if is_deprecated_mode(normalized):
         record_deprecated_mode_usage(normalized)
         logger.info("Deprecated mode %s mapped to canonical strategy", normalized)
@@ -165,31 +180,41 @@ def run_agent(
     ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
     with use_rbac_context(ctx):
         pre = _prepare_agent_run(question, mode, chat_history, use_memory, ctx)
-
-        if pre.cacheable and not is_observational_execution():
-            cached = get_cached_response(pre.sanitized_question, mode, ctx)
-            if cached is not None:
-                return _apply_post_guardrails(cached)
-
-        _consume_budget(pre.tracker, _estimate_tokens(pre.effective_question))
-
-        result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
-        result = _apply_post_guardrails(result)
-        result.tenant_id = ctx.tenant_id
-        result = _finalize_agent_result(
-            pre.sanitized_question,
-            result,
-            cacheable=pre.cacheable and not is_observational_execution(),
-            rbac_context=ctx,
-        )
-        _observe_production_request(
+        with agent_request_trace(
             question=pre.sanitized_question,
             mode=mode,
-            result=result,
-            rbac_context=ctx,
-            tracker=pre.tracker,
-        )
-        return result
+            metadata={
+                "tenant_id": ctx.tenant_id,
+                "use_memory": use_memory,
+            },
+        ) as trace_run:
+            if pre.cacheable and not is_observational_execution():
+                cached = get_cached_response(pre.sanitized_question, mode, ctx)
+                if cached is not None:
+                    result = _apply_post_guardrails(cached)
+                    record_response_outputs(trace_run, result, cached=True)
+                    return result
+
+            _consume_budget(pre.tracker, _estimate_tokens(pre.effective_question))
+
+            result = _run_with_cost_tracking(pre.effective_question, mode, pre.tracker)
+            result = _apply_post_guardrails(result)
+            result.tenant_id = ctx.tenant_id
+            result = _finalize_agent_result(
+                pre.sanitized_question,
+                result,
+                cacheable=pre.cacheable and not is_observational_execution(),
+                rbac_context=ctx,
+            )
+            _observe_production_request(
+                question=pre.sanitized_question,
+                mode=mode,
+                result=result,
+                rbac_context=ctx,
+                tracker=pre.tracker,
+            )
+            record_response_outputs(trace_run, result, cached=False)
+            return result
 
 
 def _finalize_agent_result(
@@ -495,6 +520,9 @@ def build_pipeline_payload(
     """Structured pipeline stages for the frontend debug panel."""
     citations = [c.to_dict() for c in (result.citations or [])]
     context_docs = list(result.context_docs or [])
+    tool_steps = [
+        step for step in (result.steps or []) if step.lower().startswith("tool")
+    ]
     stages: list[dict[str, Any]] = [
         {
             "id": "query",
@@ -510,6 +538,15 @@ def build_pipeline_payload(
                 "route": result.route,
                 "route_reason": result.route_reason,
                 "steps": list(result.steps or []),
+            },
+        },
+        {
+            "id": "tools",
+            "label": "Tool Selection",
+            "status": "complete" if tool_steps else "skipped",
+            "data": {
+                "calls": tool_steps,
+                "route_reason": result.route_reason,
             },
         },
         {
@@ -579,6 +616,7 @@ def stream_agent(
     """
     from src.cache.redis_cache import get_cached_response
     from src.evaluation.shadow_context import is_observational_execution
+    from src.observability import agent_request_trace, record_response_outputs
     from src.streaming import CancelledRun, use_emitter
 
     ctx = rbac_context if isinstance(rbac_context, RBACContext) else RBACContext()
@@ -634,14 +672,20 @@ def stream_agent(
 
     def worker() -> None:
         try:
-            _consume_budget(tracker, _estimate_tokens(effective_question))
-            with use_rbac_context(ctx), use_emitter(emit):
-                result = _run_with_cost_tracking(effective_question, mode, tracker)
-            result = _apply_post_guardrails(result)
-            result.tenant_id = ctx.tenant_id
-            result = _finalize_agent_result(
-                pre.sanitized_question, result, cacheable=cacheable, rbac_context=ctx
-            )
+            with agent_request_trace(
+                question=pre.sanitized_question,
+                mode=mode,
+                metadata={"tenant_id": ctx.tenant_id, "streaming": True},
+            ) as trace_run:
+                _consume_budget(tracker, _estimate_tokens(effective_question))
+                with use_rbac_context(ctx), use_emitter(emit):
+                    result = _run_with_cost_tracking(effective_question, mode, tracker)
+                result = _apply_post_guardrails(result)
+                result.tenant_id = ctx.tenant_id
+                result = _finalize_agent_result(
+                    pre.sanitized_question, result, cacheable=cacheable, rbac_context=ctx
+                )
+                record_response_outputs(trace_run, result, cached=False)
 
             # Steps/tokens were already emitted during the run; send final payload
             emit({"type": "answer", "content": result.answer})

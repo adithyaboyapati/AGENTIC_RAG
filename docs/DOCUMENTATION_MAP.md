@@ -6,7 +6,7 @@ Use this map to find the authoritative document for each topic.
 
 | Topic | Canonical (current) | Secondary | Historical |
 |-------|---------------------|-----------|------------|
-| **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) | [README.md](../README.md) | [ROADMAP.md](./ROADMAP.md) |
+| **Architecture** | [ARCHITECTURE.md](./ARCHITECTURE.md) | [BACKEND_END_TO_END_GUIDE.pdf](./BACKEND_END_TO_END_GUIDE.pdf) · [README.md](../README.md) | [ROADMAP.md](./ROADMAP.md) |
 | **LangGraph** | [LANGGRAPH.md](./LANGGRAPH.md) | [LANGCHAIN_STACK.md](./LANGCHAIN_STACK.md) | [LANGGRAPH_DEEP_DIVE.md](../LANGGRAPH_DEEP_DIVE.md) |
 | **Agentic AI concepts** | [CONCEPTS.md](./CONCEPTS.md) | [ARCHITECTURE.md](./ARCHITECTURE.md) | [AGENTIC_RAG_DEEP_DIVE.md](../AGENTIC_RAG_DEEP_DIVE.md) |
 | **RAG / retrieval** | [ARCHITECTURE.md](./ARCHITECTURE.md) § Retrieval | [LANGCHAIN_STACK.md](./LANGCHAIN_STACK.md) | [AGENTIC_RAG_DEEP_DIVE.md](../AGENTIC_RAG_DEEP_DIVE.md) |

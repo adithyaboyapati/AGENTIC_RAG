@@ -157,6 +157,7 @@ docs/              Architecture, API, evaluation, deployment (see DOCUMENTATION_
 |-----|-----|
 | [docs/DOCUMENTATION_MAP.md](docs/DOCUMENTATION_MAP.md) | **Start here** — authoritative doc index |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current production architecture |
+| [docs/BACKEND_END_TO_END_GUIDE.pdf](docs/BACKEND_END_TO_END_GUIDE.pdf) | Printable end-to-end system reference |
 | [docs/LANGGRAPH.md](docs/LANGGRAPH.md) | Canonical graph nodes & state |
 | [docs/API.md](docs/API.md) | HTTP routes and schemas |
 | [docs/EVALUATION.md](docs/EVALUATION.md) | Metrics, shadow/canary, continuous eval |

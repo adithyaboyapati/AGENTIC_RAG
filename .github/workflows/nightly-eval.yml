@@ -23,8 +23,8 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    # Skipped automatically on forks, where the API key secret is absent.
-    if: github.repository_owner != ''
+    # Forks do not have this secret, and a missing key fails ingest with a 401.
+    if: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,7 +39,14 @@ jobs:
       - name: Ingest corpus
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-        run: python -m src.ingestion.ingest --source data/sample_docs --reset
+          # Default config points at localhost Redis, which is not on the runner.
+          REDIS_URL: ""
+        run: |
+          if [ -z "${OPENAI_API_KEY}" ]; then
+            echo "OPENAI_API_KEY secret is empty; cannot embed the corpus."
+            exit 1
+          fi
+          python -m src.ingestion.ingest --source data/sample_docs --reset
 
       - name: Golden-set retrieval metrics
         env:

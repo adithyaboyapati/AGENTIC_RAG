@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any
 
 from src.evaluation.dataset_store import append_eval_run, list_cases
 from src.evaluation.eval_gates import EvalGateReport, run_eval_gates

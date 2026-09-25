@@ -56,7 +56,7 @@ jobs:
           OPENAI_API_KEY: test-key
           RATE_LIMIT_BACKEND: memory
         run: >
-          pytest tests/ -q
+          python -m pytest tests/ -q
           --cov=src --cov-report=term-missing --cov-report=xml
           --cov-fail-under=60
           --timeout=300
@@ -99,10 +99,16 @@ jobs:
         run: pip install "$(grep -E '^pip-audit==' requirements-dev.txt)"
 
       # Unfixed on PyPI — drop an ID when a patched release exists, then bump
-      # the pin instead of ignoring:
+      # the pin instead of ignoring. This app uses an embedded PersistentClient,
+      # not Chroma's HTTP server, so the server-auth advisories do not apply.
       #   PYSEC-2026-311  chromadb 1.5.9 (latest) HTTP API RCE if the server
-      #                   is exposed with trust_remote_code; default here is
-      #                   embedded PersistentClient
+      #                   is exposed with trust_remote_code
+      #   PYSEC-2026-3813 chromadb 1.5.9 (latest) missing tenant authz on the
+      #                   HTTP API
+      #   PYSEC-2026-3814 chromadb 1.5.9 (latest) code injection via
+      #                   trust_remote_code on the HTTP API
+      #   PYSEC-2026-3815 chromadb 1.5.9 (latest) RBAC ignores tenant scope
+      #                   on the HTTP API
       #   PYSEC-2026-3046 ragas 0.4.3 (latest) SSRF in unused multimodal
       #                   collections helpers
       #   PYSEC-2026-2447 diskcache 5.6.3 (latest, transitive) pickle RCE
@@ -111,6 +117,9 @@ jobs:
         run: >
           pip-audit -r requirements.txt --strict
           --ignore-vuln PYSEC-2026-311
+          --ignore-vuln PYSEC-2026-3813
+          --ignore-vuln PYSEC-2026-3814
+          --ignore-vuln PYSEC-2026-3815
           --ignore-vuln PYSEC-2026-3046
           --ignore-vuln PYSEC-2026-2447
 

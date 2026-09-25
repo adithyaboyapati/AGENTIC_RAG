@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from src.config import settings
 from src.evaluation.legacy_retirement import (

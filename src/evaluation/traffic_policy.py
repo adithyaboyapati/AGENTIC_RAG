@@ -18,7 +18,6 @@ from src.evaluation.canary_gates import evaluate_rollback_conditions
 from src.evaluation.pipeline_version import PIPELINE_CANONICAL_V1, PIPELINE_LEGACY
 from src.evaluation.preflight import run_preflight
 from src.evaluation.shadow_fingerprint import (
-    ShadowRequestContext,
     build_shadow_request_context,
     compute_input_fingerprint,
 )
@@ -411,5 +410,14 @@ def _record_canary_fallback(reason: str, stage: str) -> None:
         from src.api.metrics import record_canary_fallback
 
         record_canary_fallback(reason, stage)
+    except Exception:
+        pass
+
+
+def _record_canary_failure(stage: str) -> None:
+    try:
+        from src.api.metrics import record_canary_failure
+
+        record_canary_failure(stage)
     except Exception:
         pass

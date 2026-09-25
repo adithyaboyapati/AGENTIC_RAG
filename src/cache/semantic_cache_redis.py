@@ -7,7 +7,6 @@ import logging
 import math
 import time
 from dataclasses import dataclass
-from typing import Any
 
 from src.cache.redis_cache import get_redis_client
 from src.config import settings

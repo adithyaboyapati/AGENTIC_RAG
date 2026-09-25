@@ -35,7 +35,7 @@ def _segment_key(row: dict[str, Any], dimension: str) -> str:
     if dimension == "comparison_status":
         return str(row.get("comparison_status") or "unknown")
     if dimension == "question_length":
-        qlen = int((legacy.get("answer_length") or 0))
+        qlen = int(legacy.get("answer_length") or 0)
         return "short" if qlen < 120 else "long"
     return "unknown"
 

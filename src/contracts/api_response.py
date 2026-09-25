@@ -68,7 +68,7 @@ def canonical_to_api_response(
         verification_status=verification_status,
         confidence=confidence,
         response_status=response_status,
-        pipeline_version=f"canonical-v1",
+        pipeline_version="canonical-v1",
     )
 
 

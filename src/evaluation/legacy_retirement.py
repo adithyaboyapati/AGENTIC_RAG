@@ -8,7 +8,6 @@ from typing import Any
 
 from src.config import settings
 from src.evaluation.canary_gates import evaluate_full_cutover_readiness, evaluate_rollback_conditions
-from src.evaluation.canary_rollout import get_rollout_state
 from src.evaluation.preflight import run_preflight
 from src.evaluation.shadow_storage import list_shadow_results
 
@@ -166,7 +165,6 @@ def evaluate_legacy_retirement_readiness() -> LegacyRetirementEvaluation:
     """Determine whether legacy runtime code may be deprecated or removed."""
     blocking: list[str] = []
     warnings: list[str] = []
-    rollout = get_rollout_state()
     preflight = run_preflight(for_canary=True)
     cutover = evaluate_full_cutover_readiness()
     rollback = evaluate_rollback_conditions()

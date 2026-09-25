@@ -28,7 +28,7 @@ class SamplingOutcome:
 
 
 def _bucket(input_fingerprint: str, salt: str) -> int:
-    digest = hashlib.sha256(f"{salt}:{input_fingerprint}".encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(f"{salt}:{input_fingerprint}".encode()).hexdigest()
     return int(digest[:8], 16) % 10_000
 
 

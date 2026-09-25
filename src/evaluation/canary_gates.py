@@ -283,7 +283,6 @@ def evaluate_rollback_conditions() -> CanaryGateEvaluation:
     """Hard rollback conditions — operator should set CANARY_ENABLED=false."""
     rows = _paired_rows("canary")
     sample_count = len(rows)
-    gates: list[CanaryGateResult] = []
     rollback_triggers: list[CanaryGateResult] = []
 
     security = sum(

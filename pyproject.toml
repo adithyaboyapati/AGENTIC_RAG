@@ -27,6 +27,9 @@ ignore = [
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 asyncio_mode = "auto"
+# pytest's console script does not put the repo root on sys.path. CI invokes
+# `pytest` (not `python -m pytest`), so collection dies with "No module named src".
+pythonpath = ["."]
 addopts = "-q --strict-markers"
 filterwarnings = [
     "ignore::DeprecationWarning:pkg_resources.*",

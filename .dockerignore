@@ -30,5 +30,10 @@ tests/
 *.md
 LANGSMITH_CHECKLIST.txt
 
+# Frontend is its own image (frontend/Dockerfile). Shipping the UI lockfile in
+# the API image makes Trivy fail the API build on frontend advisories.
+frontend
+node_modules
+
 # OS
 .DS_Store

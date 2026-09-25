@@ -23,32 +23,44 @@ permissions:
 jobs:
   eval:
     runs-on: ubuntu-latest
-    # Forks do not have this secret, and a missing key fails ingest with a 401.
-    if: ${{ secrets.OPENAI_API_KEY != '' }}
     steps:
+      # secrets is not a valid context on jobs.<job_id>.if, so the key check
+      # has to happen in a step. Later steps are skipped when it is unset.
+      - name: Check for OpenAI API key
+        id: key
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -n "$OPENAI_API_KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "OPENAI_API_KEY secret is not set; skipping nightly eval."
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.key.outputs.present == 'true'
 
       - uses: actions/setup-python@v5
+        if: steps.key.outputs.present == 'true'
         with:
           python-version: "3.10"
           cache: pip
 
       - name: Install dependencies
+        if: steps.key.outputs.present == 'true'
         run: pip install -r requirements.txt
 
       - name: Ingest corpus
+        if: steps.key.outputs.present == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           # Default config points at localhost Redis, which is not on the runner.
           REDIS_URL: ""
-        run: |
-          if [ -z "${OPENAI_API_KEY}" ]; then
-            echo "OPENAI_API_KEY secret is empty; cannot embed the corpus."
-            exit 1
-          fi
-          python -m src.ingestion.ingest --source data/sample_docs --reset
+        run: python -m src.ingestion.ingest --source data/sample_docs --reset
 
       - name: Golden-set retrieval metrics
+        if: steps.key.outputs.present == 'true'
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
@@ -57,7 +69,7 @@ jobs:
         run: python -m src.evaluation.retrieval_metrics --gate
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && steps.key.outputs.present == 'true'
         with:
           name: retrieval-report
           path: eval_results/

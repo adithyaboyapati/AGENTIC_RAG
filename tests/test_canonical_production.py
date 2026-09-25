@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from src.cache.semantic_cache import SemanticCache
-from src.contracts.models import VerificationResult
 from src.graph.citation_mapper import map_citations, scan_citation_markers
 from src.graph.verification_engine import VerificationInput, derive_response_status, verify_response
 from src.ingestion.job_store import IngestionJobStore, _deserialize_job

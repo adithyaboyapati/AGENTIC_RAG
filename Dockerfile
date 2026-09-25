@@ -28,10 +28,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Pull patched Debian packages. python:3.10-slim lags security updates, and
+# Trivy fails the build on HIGH/CRITICAL issues that already have a fix.
+RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY --from=builder /wheels /wheels
 COPY requirements.txt .
 RUN pip install --no-index --find-links=/wheels -r requirements.txt \
-    && rm -rf /wheels
+    && rm -rf /wheels \
+    # python:3.10-slim ships setuptools 79, which vendors wheel 0.45.1
+    # (CVE-2026-24049) and jaraco.context 5.3.0 (CVE-2026-23949). apt upgrade
+    # does not touch these. setuptools 84 vendors the patched copies.
+    && pip install --upgrade "setuptools==84.0.0" \
+    && rm -rf /root/.cache/pip
 
 # Create the user before copying so application code is owned by root and is
 # not writable by the process that runs it.

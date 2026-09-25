@@ -100,11 +100,6 @@ def validate_citation_mapping(
     """Return citation_correctness, citation_completeness, issues, snippet_mismatches."""
     included = [e for e in context_evidence if e.included_in_context]
     known_ids = {item.evidence_id for item in included}
-    position_map = {
-        item.context_position: item
-        for item in included
-        if item.context_position is not None
-    }
     issues: list[str] = []
     snippet_mismatches: list[int] = []
 

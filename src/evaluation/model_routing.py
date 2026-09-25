@@ -31,7 +31,6 @@ def route_model(task: ModelTask | str, *, complexity: str = "normal") -> ModelRo
     """Select a model for a task based on configurable policy."""
     task_name = task.value if isinstance(task, ModelTask) else str(task)
     primary = settings.openai_model
-    fallback = settings.groq_model if settings.llm_fallback_enabled else None
 
     if task_name == ModelTask.VERIFICATION.value:
         return ModelRouteDecision(

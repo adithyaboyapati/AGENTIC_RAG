@@ -78,7 +78,6 @@ def metrics_from_legacy(
 def metrics_from_canonical(response: CanonicalAgentResponse) -> PipelineMetrics:
     verification = response.verification
     evidence_in_context = [e for e in response.evidence if e.included_in_context]
-    trace_types = [event.event_type for event in response.trace]
     return PipelineMetrics(
         pipeline="canonical",
         mode=response.mode,

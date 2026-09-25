@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -185,19 +185,6 @@ class TestStreamingTrafficPolicy:
                     "bucket": 0,
                 },
             )(),
-        )
-        canonical = MagicMock(
-            answer="canonical stream answer",
-            mode="canonical",
-            route="retrieve",
-            strategy="simple",
-            evidence=(),
-            citations=(),
-            verification=None,
-            trace=(),
-            latency_ms=10.0,
-            response_status="answered",
-            error_code=None,
         )
         monkeypatch.setattr(
             "src.evaluation.traffic_policy.execute_with_traffic_policy",

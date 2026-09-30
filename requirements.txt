@@ -41,7 +41,7 @@ ragas==0.4.3
 ddgs==9.14.4
 
 # Frontend
-streamlit==1.58.0
+streamlit==1.64.0
 
 # Memory (optional Supabase persistence)
 supabase==2.31.0
